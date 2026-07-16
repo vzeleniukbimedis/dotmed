@@ -64,23 +64,36 @@ async function callModel(model, markdown) {
   }
 }
 
+// Matches firecrawlClient's isEmptyExtraction signal fields — a model can
+// return HTTP 200 with syntactically valid JSON whose fields are simply
+// blank, which isn't an exception and must still trigger the fallback.
+function isEmptyResult(json) {
+  return !(json?.title || json?.brand || json?.description);
+}
+
 async function extractListingData(markdown, url) {
   const primaryModel = process.env.MODEL_NAME || 'gpt-4';
   const fallbackModel = process.env.MODEL_NAME_FALLBACK;
 
+  let primaryResult;
   try {
-    return await callModel(primaryModel, markdown);
+    primaryResult = await callModel(primaryModel, markdown);
+    if (!isEmptyResult(primaryResult)) return primaryResult;
+    logger.error({ url, model: primaryModel }, 'primary model returned valid but all-empty JSON');
   } catch (err) {
     logger.error({ url, model: primaryModel, err }, 'primary model extraction failed');
     if (!fallbackModel) throw err;
+  }
 
-    logger.info({ url, model: fallbackModel }, 'retrying extraction with fallback model');
-    try {
-      return await callModel(fallbackModel, markdown);
-    } catch (fallbackErr) {
-      logger.error({ url, model: fallbackModel, err: fallbackErr }, 'fallback model extraction failed');
-      throw fallbackErr;
-    }
+  if (!fallbackModel) return primaryResult;
+
+  logger.info({ url, model: fallbackModel }, 'retrying extraction with fallback model');
+  try {
+    return await callModel(fallbackModel, markdown);
+  } catch (fallbackErr) {
+    logger.error({ url, model: fallbackModel, err: fallbackErr }, 'fallback model extraction failed');
+    if (primaryResult !== undefined) return primaryResult;
+    throw fallbackErr;
   }
 }
 

@@ -96,3 +96,44 @@ test('extractListingData throws the fallback error when both models fail', async
     /still broken/,
   );
 });
+
+test('extractListingData tries the fallback when the primary succeeds but returns all-empty fields', async (t) => {
+  const originalFetch = global.fetch;
+  process.env.MODEL_NAME = 'flaky-model';
+  process.env.MODEL_NAME_FALLBACK = 'good-model';
+
+  global.fetch = async (url, opts) => {
+    const { model } = JSON.parse(opts.body);
+    if (model === 'flaky-model') {
+      return mockChatResponse(200, {
+        choices: [{ message: { content: JSON.stringify({ title: '', condition: '', description: '', isPart: false }) } }],
+      });
+    }
+    return mockChatResponse(200, {
+      choices: [{ message: { content: JSON.stringify({ title: 'Real Title', condition: 'Used', description: 'x', isPart: false }) } }],
+    });
+  };
+
+  t.after(() => {
+    global.fetch = originalFetch;
+    delete process.env.MODEL_NAME_FALLBACK;
+  });
+
+  const result = await extractListingData('# markdown', 'https://example.com/1');
+  assert.equal(result.title, 'Real Title');
+});
+
+test('extractListingData returns the primary all-empty result when there is no fallback configured', async (t) => {
+  const originalFetch = global.fetch;
+  process.env.MODEL_NAME = 'flaky-model';
+  delete process.env.MODEL_NAME_FALLBACK;
+
+  global.fetch = async () => mockChatResponse(200, {
+    choices: [{ message: { content: JSON.stringify({ title: '', condition: '', description: '', isPart: false }) } }],
+  });
+
+  t.after(() => { global.fetch = originalFetch; });
+
+  const result = await extractListingData('# markdown', 'https://example.com/1');
+  assert.equal(result.title, '');
+});
