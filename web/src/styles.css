@@ -399,8 +399,36 @@ h1, h2 { font-family: var(--font-heading); }
   letter-spacing: 0.08em;
   color: var(--text-muted);
   text-transform: uppercase;
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin-bottom: 8px;
+}
+
+.ai-limits-grid {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.ai-limit-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ai-limit-value {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  color: var(--text);
+}
+
+.ai-limit-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: none;
+  letter-spacing: 0;
 }
 
 textarea {

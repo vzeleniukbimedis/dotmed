@@ -7,6 +7,7 @@ function mockChatResponse(status, body) {
     ok: status >= 200 && status < 300,
     status,
     json: async () => body,
+    headers: { get: () => null },
   };
 }
 

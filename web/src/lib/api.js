@@ -85,3 +85,10 @@ export async function updateSettings(updates) {
   if (!res.ok) throw new Error(body.error || 'Request failed');
   return body;
 }
+
+export async function getAiLimits() {
+  const res = await fetch('/api/ai-limits');
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || 'Request failed');
+  return body;
+}

@@ -23,6 +23,33 @@ function getRateLimitBackoffMs() {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Captured live from each real API response — providers like Mistral send
+// their actual per-minute request/token budget on every call, so this is
+// real usage data rather than a hardcoded guess at plan limits.
+let lastRateLimitInfo = null;
+
+function captureRateLimitHeaders(model, res) {
+  const get = (name) => res.headers.get(name);
+  const limitReq = get('x-ratelimit-limit-req-minute') ?? get('x-ratelimit-limit-requests');
+  const remainingReq = get('x-ratelimit-remaining-req-minute') ?? get('x-ratelimit-remaining-requests');
+  const limitTokens = get('x-ratelimit-limit-tokens-minute') ?? get('x-ratelimit-limit-tokens');
+  const remainingTokens = get('x-ratelimit-remaining-tokens-minute') ?? get('x-ratelimit-remaining-tokens');
+  if (limitReq == null && limitTokens == null) return; // provider doesn't expose these
+
+  lastRateLimitInfo = {
+    model,
+    limitRequestsPerMinute: limitReq != null ? Number(limitReq) : null,
+    remainingRequestsPerMinute: remainingReq != null ? Number(remainingReq) : null,
+    limitTokensPerMinute: limitTokens != null ? Number(limitTokens) : null,
+    remainingTokensPerMinute: remainingTokens != null ? Number(remainingTokens) : null,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function getRateLimitInfo() {
+  return lastRateLimitInfo;
+}
+
 function schemaFieldLines(schema) {
   return Object.entries(schema.properties)
     .map(([key, def]) => `- "${key}" (${def.type}): ${def.description}`)
@@ -72,6 +99,8 @@ async function callModel(model, markdown) {
   } finally {
     clearTimeout(timeout);
   }
+
+  captureRateLimitHeaders(model, res);
 
   let body;
   try {
@@ -133,4 +162,4 @@ async function extractListingData(markdown, url) {
   }
 }
 
-module.exports = { extractListingData, buildSystemPrompt };
+module.exports = { extractListingData, buildSystemPrompt, getRateLimitInfo };

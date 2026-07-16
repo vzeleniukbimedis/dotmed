@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Settings } from 'lucide-react';
+import { Settings, Gauge } from 'lucide-react';
 import PageHeader from '../components/PageHeader.jsx';
-import { getSettings, updateSettings } from '../lib/api.js';
+import { getSettings, updateSettings, getAiLimits } from '../lib/api.js';
+
+const AI_LIMITS_POLL_MS = 5000;
 
 export default function SettingsPage() {
   const [form, setForm] = useState(null);
   const [status, setStatus] = useState('loading');
   const [error, setError] = useState(null);
+  const [aiLimits, setAiLimits] = useState(null);
 
   useEffect(() => {
     getSettings()
@@ -23,6 +26,15 @@ export default function SettingsPage() {
         setError(err.message);
         setStatus('error');
       });
+  }, []);
+
+  // Live per-minute request/token budget as last reported by the AI
+  // provider's own response headers — updates as real scans happen.
+  useEffect(() => {
+    const poll = () => getAiLimits().then(setAiLimits).catch(() => {});
+    poll();
+    const interval = setInterval(poll, AI_LIMITS_POLL_MS);
+    return () => clearInterval(interval);
   }, []);
 
   function setField(key, value) {
@@ -88,6 +100,27 @@ export default function SettingsPage() {
           </div>
         </div>
       )}
+
+      <div className="panel">
+        <div className="panel-label"><Gauge size={14} /> AI-провайдер — ліміти (наживо)</div>
+        {aiLimits ? (
+          <>
+            <div className="ai-limits-grid">
+              <div className="ai-limit-item">
+                <div className="ai-limit-value">{aiLimits.remainingRequestsPerMinute ?? '—'} / {aiLimits.limitRequestsPerMinute ?? '—'}</div>
+                <div className="ai-limit-label">Запитів/хв ({aiLimits.model})</div>
+              </div>
+              <div className="ai-limit-item">
+                <div className="ai-limit-value">{aiLimits.remainingTokensPerMinute ?? '—'} / {aiLimits.limitTokensPerMinute ?? '—'}</div>
+                <div className="ai-limit-label">Токенів/хв</div>
+              </div>
+            </div>
+            <p className="info-text">Оновлено: {new Date(aiLimits.updatedAt).toLocaleTimeString('uk-UA')}</p>
+          </>
+        ) : (
+          <p className="info-text">Даних ще немає — з'являться після першого реального сканування.</p>
+        )}
+      </div>
     </motion.div>
   );
 }

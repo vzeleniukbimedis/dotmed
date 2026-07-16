@@ -7,6 +7,7 @@ const { isStorefrontUrl } = require('./dotmedParser');
 const { discoverListings } = require('./storefrontScraper');
 const { verifyGoogleToken, getAllowlist, requireAuth } = require('./auth');
 const settingsStore = require('./settingsStore');
+const aiExtractor = require('./aiExtractor');
 const logger = require('./logger').child({ module: 'server' });
 
 const app = express();
@@ -70,9 +71,17 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 
 app.use('/api/jobs', requireAuth);
 app.use('/api/settings', requireAuth);
+app.use('/api/ai-limits', requireAuth);
 
 app.get('/api/settings', async (req, res) => {
   res.json(await settingsStore.getAllSettings());
+});
+
+// Live per-minute request/token budget as last reported by the AI provider's
+// own response headers (not a hardcoded plan description) — null until the
+// first real extraction call happens after boot.
+app.get('/api/ai-limits', (req, res) => {
+  res.json(aiExtractor.getRateLimitInfo());
 });
 
 app.put('/api/settings', async (req, res) => {
