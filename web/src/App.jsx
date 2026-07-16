@@ -16,6 +16,7 @@ import { fetchMe, loginWithGoogle, logout } from './lib/auth.js';
 
 const POLL_INTERVAL_MS = 1500;
 const TICK_INTERVAL_MS = 1000;
+const ITEMS_PAGE_SIZE = 200;
 
 function getInitialTheme() {
   return document.documentElement.getAttribute('data-theme') || 'light';
@@ -31,12 +32,19 @@ export default function App() {
   const [theme, setTheme] = useState(getInitialTheme);
 
   const [job, setJob] = useState(null);
+  const [jobLoading, setJobLoading] = useState(false);
   const [error, setError] = useState(null);
   const [urlsText, setUrlsText] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [itemsLimit, setItemsLimit] = useState(ITEMS_PAGE_SIZE);
   const [, setTick] = useState(0);
   const pollRef = useRef(null);
   const tickRef = useRef(null);
+  const itemsLimitRef = useRef(ITEMS_PAGE_SIZE);
+
+  useEffect(() => {
+    itemsLimitRef.current = itemsLimit;
+  }, [itemsLimit]);
 
   useEffect(() => {
     fetchMe().then((u) => {
@@ -56,7 +64,15 @@ export default function App() {
   }, []);
 
   function isRunning(j) {
-    return j?.items.some((i) => i.status === 'pending' || i.status === 'running');
+    if (!j) return false;
+    if (j.counts) return j.counts.pending > 0 || j.counts.running > 0;
+    return j.items.some((i) => i.status === 'pending' || i.status === 'running');
+  }
+
+  async function refreshJob(jobId) {
+    const j = await getJob(jobId, { offset: 0, limit: itemsLimitRef.current });
+    setJob(j);
+    return j;
   }
 
   function startPolling(jobId) {
@@ -64,7 +80,7 @@ export default function App() {
     clearInterval(tickRef.current);
     tickRef.current = setInterval(() => setTick((t) => t + 1), TICK_INTERVAL_MS);
     pollRef.current = setInterval(async () => {
-      const j = await getJob(jobId);
+      const j = await getJob(jobId, { offset: 0, limit: itemsLimitRef.current });
       setJob(j);
       if (!isRunning(j)) {
         clearInterval(pollRef.current);
@@ -101,9 +117,10 @@ export default function App() {
   async function handleSubmit(urls, types) {
     setError(null);
     setSubmitting(true);
+    setItemsLimit(ITEMS_PAGE_SIZE);
     try {
       const jobId = await createJob(urls, types);
-      const j = await getJob(jobId);
+      const j = await getJob(jobId, { offset: 0, limit: ITEMS_PAGE_SIZE });
       setJob(j);
       startPolling(jobId);
     } catch (err) {
@@ -114,43 +131,59 @@ export default function App() {
   }
 
   async function handleSelectHistory(jobId) {
-    const j = await getJob(jobId);
+    setError(null);
+    setJobLoading(true);
+    setItemsLimit(ITEMS_PAGE_SIZE);
+    try {
+      const j = await getJob(jobId, { offset: 0, limit: ITEMS_PAGE_SIZE });
+      setJob(j);
+      if (isRunning(j)) startPolling(jobId);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setJobLoading(false);
+    }
+  }
+
+  async function handleLoadMoreItems() {
+    if (!job) return;
+    const nextLimit = itemsLimit + ITEMS_PAGE_SIZE;
+    setItemsLimit(nextLimit);
+    itemsLimitRef.current = nextLimit;
+    const j = await getJob(job.id, { offset: 0, limit: nextLimit });
     setJob(j);
-    if (isRunning(j)) startPolling(jobId);
   }
 
   async function handlePause() {
     if (!job) return;
     await pauseJobApi(job.id);
-    setJob(await getJob(job.id));
+    await refreshJob(job.id);
   }
 
   async function handleUnpause() {
     if (!job) return;
     await unpauseJobApi(job.id);
-    const j = await getJob(job.id);
-    setJob(j);
+    const j = await refreshJob(job.id);
     if (isRunning(j)) startPolling(job.id);
   }
 
   async function handleStop() {
     if (!job) return;
     await stopJobApi(job.id);
-    setJob(await getJob(job.id));
+    await refreshJob(job.id);
   }
 
   async function handleResumeStopped() {
     if (!job) return;
     await resumeJobApi(job.id);
-    const j = await getJob(job.id);
-    setJob(j);
+    await refreshJob(job.id);
     startPolling(job.id);
   }
 
   async function handleDeleteItem(url) {
     if (!job) return;
-    const updated = await deleteJobItem(job.id, url);
-    setJob(updated);
+    await deleteJobItem(job.id, url);
+    await refreshJob(job.id);
   }
 
   function handleNavigate(page) {
@@ -208,12 +241,14 @@ export default function App() {
               running={running}
               error={error}
               job={job}
+              jobLoading={jobLoading}
               items={items}
               onPause={handlePause}
               onUnpause={handleUnpause}
               onStop={handleStop}
               onResumeStopped={handleResumeStopped}
               onDeleteItem={handleDeleteItem}
+              onLoadMoreItems={handleLoadMoreItems}
             />
           )}
           {activePage === 'history' && (

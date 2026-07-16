@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { Inbox, ScanLine, Pause, Play, Square } from 'lucide-react';
+import { Inbox, Loader2, ScanLine, Pause, Play, Square } from 'lucide-react';
 import PageHeader from '../components/PageHeader.jsx';
 import UrlInput from '../components/UrlInput.jsx';
 import StatsBar from '../components/StatsBar.jsx';
@@ -20,7 +20,7 @@ const cardVariants = {
 
 function JobControls({ job, onPause, onUnpause, onStop, onResumeStopped }) {
   if (!job) return null;
-  const hasPending = job.items.some((i) => i.status === 'pending');
+  const hasPending = (job.counts?.pending ?? 0) > 0;
   const runState = job.runState || 'idle';
 
   if (runState === 'running') {
@@ -63,9 +63,12 @@ function JobControls({ job, onPause, onUnpause, onStop, onResumeStopped }) {
 }
 
 export default function ScannerPage({
-  urlsText, onUrlsChange, onSubmit, submitting, running, error, job, items,
-  onPause, onUnpause, onStop, onResumeStopped, onDeleteItem,
+  urlsText, onUrlsChange, onSubmit, submitting, running, error, job, jobLoading, items,
+  onPause, onUnpause, onStop, onResumeStopped, onDeleteItem, onLoadMoreItems,
 }) {
+  const counts = job?.counts;
+  const hasMore = counts && items.length < counts.total;
+
   return (
     <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.18 }}>
       <PageHeader icon={ScanLine} title="Сканер" subtitle="Встав лінки на оголошення dotmed.com або на продавця" />
@@ -74,24 +77,43 @@ export default function ScannerPage({
 
       {error && <p className="error-text">Помилка: {error}</p>}
 
-      <StatsBar items={items} />
-      {job && <ProgressBar items={items} createdAt={job.createdAt} />}
+      {counts && <StatsBar counts={counts} />}
+      {job && counts && <ProgressBar counts={counts} createdAt={job.createdAt} />}
       <JobControls job={job} onPause={onPause} onUnpause={onUnpause} onStop={onStop} onResumeStopped={onResumeStopped} />
-      <ExportButtons items={items} />
+      {job && <ExportButtons jobId={job.id} successCount={counts?.success ?? 0} />}
 
-      {items.length === 0 ? (
+      {jobLoading ? (
+        <div className="empty-state">
+          <Loader2 size={28} strokeWidth={1.5} className="spin" />
+          <p>Завантажуємо задачу…</p>
+        </div>
+      ) : items.length === 0 ? (
         <div className="empty-state">
           <Inbox size={28} strokeWidth={1.5} />
           <p>Немає даних. Встав лінки вище і натисни «Сканувати».</p>
         </div>
       ) : (
-        <motion.div className="results-grid" variants={gridVariants} initial="hidden" animate="show">
-          {items.map((item) => (
-            <motion.div key={item.url} variants={cardVariants}>
-              <ListingCard item={item} onDelete={onDeleteItem} />
-            </motion.div>
-          ))}
-        </motion.div>
+        <>
+          <motion.div className="results-grid" variants={gridVariants} initial="hidden" animate="show">
+            {items.map((item) => (
+              <motion.div key={item.url} variants={cardVariants}>
+                <ListingCard item={item} onDelete={onDeleteItem} />
+              </motion.div>
+            ))}
+          </motion.div>
+          {hasMore && (
+            <div className="load-more-row">
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.97 }}
+                className="secondary"
+                onClick={onLoadMoreItems}
+              >
+                Завантажити ще ({items.length} з {counts.total})
+              </motion.button>
+            </div>
+          )}
+        </>
       )}
 
       <Help />

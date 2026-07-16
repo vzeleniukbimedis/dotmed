@@ -1,21 +1,36 @@
-import { FileSpreadsheet, FileText, FileJson } from 'lucide-react';
+import { useState } from 'react';
+import { FileSpreadsheet, FileText, FileJson, Loader2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { downloadJson, downloadCsv, downloadXlsx } from '../lib/exportUtils.js';
+import { getJob } from '../lib/api.js';
 
-export default function ExportButtons({ items }) {
-  const successCount = items.filter((i) => i.status === 'success').length;
-  if (successCount === 0) return null;
+// Only a page of items is kept in memory for large jobs (see App.jsx
+// pagination) — exporting must always pull the complete, untruncated set
+// straight from the server, not whatever page happens to be on screen.
+export default function ExportButtons({ jobId, successCount }) {
+  const [exporting, setExporting] = useState(false);
+  if (!successCount) return null;
+
+  async function handleExport(downloadFn) {
+    setExporting(true);
+    try {
+      const full = await getJob(jobId);
+      downloadFn(full.items);
+    } finally {
+      setExporting(false);
+    }
+  }
 
   return (
     <div className="export-actions">
-      <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }} className="secondary" onClick={() => downloadXlsx(items)}>
-        <FileSpreadsheet size={15} /> Excel
+      <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }} className="secondary" disabled={exporting} onClick={() => handleExport(downloadXlsx)}>
+        {exporting ? <Loader2 size={15} className="spin" /> : <FileSpreadsheet size={15} />} Excel
       </motion.button>
-      <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }} className="secondary" onClick={() => downloadCsv(items)}>
-        <FileText size={15} /> CSV
+      <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }} className="secondary" disabled={exporting} onClick={() => handleExport(downloadCsv)}>
+        {exporting ? <Loader2 size={15} className="spin" /> : <FileText size={15} />} CSV
       </motion.button>
-      <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }} className="secondary" onClick={() => downloadJson(items)}>
-        <FileJson size={15} /> JSON
+      <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }} className="secondary" disabled={exporting} onClick={() => handleExport(downloadJson)}>
+        {exporting ? <Loader2 size={15} className="spin" /> : <FileJson size={15} />} JSON
       </motion.button>
     </div>
   );

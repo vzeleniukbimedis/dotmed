@@ -4,11 +4,11 @@ function formatSeconds(ms) {
   return `${Math.floor(s / 60)}хв ${s % 60}с`;
 }
 
-export default function ProgressBar({ items, createdAt }) {
-  if (items.length === 0) return null;
+export default function ProgressBar({ counts, createdAt }) {
+  if (!counts || counts.total === 0) return null;
 
-  const total = items.length;
-  const done = items.filter((i) => i.status === 'success' || i.status === 'error').length;
+  const { total } = counts;
+  const done = counts.success + counts.error;
   const percent = Math.round((done / total) * 100);
   const elapsedMs = Date.now() - new Date(createdAt).getTime();
   const avgPerItem = done > 0 ? elapsedMs / done : null;

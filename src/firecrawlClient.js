@@ -12,6 +12,10 @@ function isBlockedResponse(data) {
     && (markdown.includes('Performing security verification') || markdown.includes('malicious bots'));
 }
 
+function isRateLimited(data) {
+  return data?.metadata?.statusCode === 429;
+}
+
 function isEmptyExtraction(result) {
   // Photos come from a separate markdown regex, not the AI extraction — their
   // presence doesn't prove the AI actually returned structured data. Require
@@ -64,6 +68,16 @@ async function scrapeListing(url, onProgress = () => {}) {
 
     const statusCode = data?.metadata?.statusCode;
     const markdownLen = (data?.markdown || '').length;
+
+    if (isRateLimited(data)) {
+      logger.error({ url, attempt, maxAttempts: MAX_ATTEMPTS, statusCode }, 'rate limited (429)');
+      lastError = new Error('DOTmed тимчасово обмежив кількість запитів (HTTP 429)');
+      if (attempt < MAX_ATTEMPTS) {
+        onProgress({ stage: 'rotating_ip', attempt, maxAttempts: MAX_ATTEMPTS });
+        await proxyRotator.rotateIp();
+      }
+      continue;
+    }
 
     if (!isBlockedResponse(data)) {
       const result = {

@@ -9,8 +9,12 @@ export async function createJob(urls, types) {
   return body.jobId;
 }
 
-export async function getJob(jobId) {
-  const res = await fetch(`/api/jobs/${jobId}`);
+export async function getJob(jobId, { offset, limit } = {}) {
+  const qs = new URLSearchParams();
+  if (offset != null) qs.set('offset', offset);
+  if (limit != null) qs.set('limit', limit);
+  const suffix = qs.toString() ? `?${qs}` : '';
+  const res = await fetch(`/api/jobs/${jobId}${suffix}`);
   const body = await res.json();
   if (!res.ok) throw new Error(body.error || 'Request failed');
   return body;

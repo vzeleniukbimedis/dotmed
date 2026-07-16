@@ -57,18 +57,45 @@ async function saveJob(job) {
   }
 }
 
-async function loadJob(id) {
+// Large storefronts can have tens of thousands of items — always compute
+// counts via a SQL aggregate (cheap) rather than the full row set, and let
+// callers optionally page the items themselves via { offset, limit }.
+async function loadJob(id, { offset = 0, limit } = {}) {
   const jobRes = await db.query('SELECT id, owner_email, created_at FROM jobs WHERE id = $1', [id]);
   if (jobRes.rows.length === 0) return null;
 
-  const itemsRes = await db.query('SELECT * FROM job_items WHERE job_id = $1 ORDER BY position', [id]);
+  const countsRes = await db.query(
+    `SELECT COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE status = 'success')::int AS success,
+            COUNT(*) FILTER (WHERE status = 'error')::int AS error,
+            COUNT(*) FILTER (WHERE status = 'pending')::int AS pending,
+            COUNT(*) FILTER (WHERE status = 'running')::int AS running,
+            COUNT(*) FILTER (WHERE status = 'success' AND (data->>'isPart')::boolean IS TRUE)::int AS parts
+     FROM job_items WHERE job_id = $1`,
+    [id],
+  );
+  const counts = countsRes.rows[0];
+
+  let itemsSql = 'SELECT * FROM job_items WHERE job_id = $1 ORDER BY position';
+  const params = [id];
+  if (limit != null) {
+    itemsSql += ' LIMIT $2 OFFSET $3';
+    params.push(limit, offset);
+  }
+  const itemsRes = await db.query(itemsSql, params);
 
   return {
     id: jobRes.rows[0].id,
     ownerEmail: jobRes.rows[0].owner_email,
     createdAt: jobRes.rows[0].created_at.toISOString(),
     items: itemsRes.rows.map(toItem),
+    counts,
   };
+}
+
+async function getJobOwner(id) {
+  const { rows } = await db.query('SELECT owner_email FROM jobs WHERE id = $1', [id]);
+  return rows[0]?.owner_email ?? null;
 }
 
 async function deleteItem(jobId, url) {
@@ -110,4 +137,4 @@ async function listJobs(ownerEmail) {
   }));
 }
 
-module.exports = { createJob, saveJob, loadJob, listJobs, deleteItem, recoverOrphanedItems };
+module.exports = { createJob, saveJob, loadJob, listJobs, deleteItem, recoverOrphanedItems, getJobOwner };

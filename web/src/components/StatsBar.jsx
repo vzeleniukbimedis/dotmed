@@ -1,9 +1,6 @@
-export default function StatsBar({ items }) {
-  const total = items.length;
-  const success = items.filter((i) => i.status === 'success').length;
-  const error = items.filter((i) => i.status === 'error').length;
-  const parts = items.filter((i) => i.status === 'success' && i.data.isPart).length;
-  const pending = items.filter((i) => i.status === 'pending' || i.status === 'running').length;
+export default function StatsBar({ counts }) {
+  const { total, success, error, parts, pending: pendingCount, running } = counts;
+  const pending = pendingCount + running;
 
   const vitals = [
     { label: 'Всього', value: total },

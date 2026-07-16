@@ -4,7 +4,7 @@ import { ScanLine, Loader2 } from 'lucide-react';
 
 export default function UrlInput({ value, onChange, onSubmit, disabled }) {
   const [includeEquipment, setIncludeEquipment] = useState(true);
-  const [includeParts, setIncludeParts] = useState(true);
+  const [includeParts, setIncludeParts] = useState(false);
 
   function handleSubmit() {
     const urls = value.split('\n').map((s) => s.trim()).filter(Boolean);

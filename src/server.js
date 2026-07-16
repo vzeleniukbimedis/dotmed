@@ -140,8 +140,10 @@ app.get('/api/jobs', async (req, res) => {
   res.json({ jobs: await jobStore.listJobs(req.session.user.email) });
 });
 
-async function loadOwnedJob(req, res) {
-  const job = await jobStore.loadJob(req.params.id);
+// Full job load (with items) — only for routes that actually need the item
+// rows (initial/paginated display, resume's pending/error scan).
+async function loadOwnedJob(req, res, jobOptions) {
+  const job = await jobStore.loadJob(req.params.id, jobOptions);
   if (!job || job.ownerEmail !== req.session.user.email) {
     res.status(404).json({ error: 'Job not found' });
     return null;
@@ -149,8 +151,22 @@ async function loadOwnedJob(req, res) {
   return job;
 }
 
+// Cheap ownership check for control routes (pause/unpause/stop/delete) that
+// don't need item rows at all — avoids loading/serializing tens of thousands
+// of items just to flip a control flag on a large storefront job.
+async function checkOwnership(req, res) {
+  const ownerEmail = await jobStore.getJobOwner(req.params.id);
+  if (!ownerEmail || ownerEmail !== req.session.user.email) {
+    res.status(404).json({ error: 'Job not found' });
+    return false;
+  }
+  return true;
+}
+
 app.get('/api/jobs/:id', async (req, res) => {
-  const job = await loadOwnedJob(req, res);
+  const limit = req.query.limit != null ? parseInt(req.query.limit, 10) : undefined;
+  const offset = req.query.offset != null ? parseInt(req.query.offset, 10) : 0;
+  const job = await loadOwnedJob(req, res, { offset, limit });
   if (!job) return;
   res.json({ ...job, runState: getRunState(job.id) });
 });
@@ -159,38 +175,33 @@ app.post('/api/jobs/:id/resume', async (req, res) => {
   const job = await loadOwnedJob(req, res);
   if (!job) return;
   resumeJob(job).catch((err) => logger.error({ jobId: job.id, err }, 'resume failed'));
-  res.json({ ...job, runState: getRunState(job.id) });
+  res.json({ runState: getRunState(job.id) });
 });
 
 app.post('/api/jobs/:id/pause', async (req, res) => {
-  const job = await loadOwnedJob(req, res);
-  if (!job) return;
-  pauseJob(job.id);
-  res.json({ runState: getRunState(job.id) });
+  if (!(await checkOwnership(req, res))) return;
+  pauseJob(req.params.id);
+  res.json({ runState: getRunState(req.params.id) });
 });
 
 app.post('/api/jobs/:id/unpause', async (req, res) => {
-  const job = await loadOwnedJob(req, res);
-  if (!job) return;
-  unpauseJob(job.id);
-  res.json({ runState: getRunState(job.id) });
+  if (!(await checkOwnership(req, res))) return;
+  unpauseJob(req.params.id);
+  res.json({ runState: getRunState(req.params.id) });
 });
 
 app.post('/api/jobs/:id/stop', async (req, res) => {
-  const job = await loadOwnedJob(req, res);
-  if (!job) return;
-  stopJob(job.id);
-  res.json({ runState: getRunState(job.id) });
+  if (!(await checkOwnership(req, res))) return;
+  stopJob(req.params.id);
+  res.json({ runState: getRunState(req.params.id) });
 });
 
 app.delete('/api/jobs/:id/items', async (req, res) => {
-  const job = await loadOwnedJob(req, res);
-  if (!job) return;
+  if (!(await checkOwnership(req, res))) return;
   const { url } = req.body || {};
   if (!url) return res.status(400).json({ error: 'Missing url' });
-  await jobStore.deleteItem(job.id, url);
-  const updated = await jobStore.loadJob(job.id);
-  res.json({ ...updated, runState: getRunState(job.id) });
+  await jobStore.deleteItem(req.params.id, url);
+  res.json({ ok: true });
 });
 
 async function recoverInterruptedJobs() {
