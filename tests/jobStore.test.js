@@ -1,0 +1,68 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+require('dotenv').config();
+const jobStore = require('../src/jobStore');
+const db = require('../src/db');
+
+const OWNER_A = 'test-owner-a@example.com';
+const OWNER_B = 'test-owner-b@example.com';
+
+test('createJob persists items with correct initial status', async () => {
+  const job = await jobStore.createJob(
+    ['https://www.dotmed.com/listing/a/1', { url: 'https://www.dotmed.com/listing/b/2', error: 'boom' }],
+    OWNER_A,
+  );
+  assert.equal(job.items.length, 2);
+  assert.equal(job.items[0].status, 'pending');
+  assert.equal(job.items[1].status, 'error');
+  assert.equal(job.items[1].error, 'boom');
+});
+
+test('saveJob updates item fields and loadJob reflects them', async () => {
+  const job = await jobStore.createJob(['https://www.dotmed.com/listing/a/1'], OWNER_A);
+  job.items[0].status = 'success';
+  job.items[0].data = { brand: 'GE', photos: [] };
+  await jobStore.saveJob(job);
+
+  const loaded = await jobStore.loadJob(job.id);
+  assert.equal(loaded.items[0].status, 'success');
+  assert.equal(loaded.items[0].data.brand, 'GE');
+});
+
+test('loadJob returns null for a nonexistent id', async () => {
+  const loaded = await jobStore.loadJob('00000000-0000-0000-0000-000000000000');
+  assert.equal(loaded, null);
+});
+
+test('listJobs only returns jobs owned by that email (per-user isolation)', async () => {
+  const jobA = await jobStore.createJob(['https://www.dotmed.com/listing/a/1'], OWNER_A);
+  await jobStore.createJob(['https://www.dotmed.com/listing/b/2'], OWNER_B);
+
+  const listA = await jobStore.listJobs(OWNER_A);
+  const listB = await jobStore.listJobs(OWNER_B);
+
+  assert.ok(listA.some((j) => j.id === jobA.id));
+  assert.ok(!listB.some((j) => j.id === jobA.id), 'owner B must not see owner A jobs');
+});
+
+test('listJobs summary counts success/error correctly', async () => {
+  const job = await jobStore.createJob(
+    ['https://www.dotmed.com/listing/a/1', 'https://www.dotmed.com/listing/a/2'],
+    OWNER_A,
+  );
+  job.items[0].status = 'success';
+  job.items[1].status = 'error';
+  job.items[1].error = 'failed';
+  await jobStore.saveJob(job);
+
+  const list = await jobStore.listJobs(OWNER_A);
+  const summary = list.find((j) => j.id === job.id);
+  assert.equal(summary.total, 2);
+  assert.equal(summary.success, 1);
+  assert.equal(summary.error, 1);
+});
+
+test.after(async () => {
+  await db.query('DELETE FROM jobs WHERE owner_email IN ($1, $2)', [OWNER_A, OWNER_B]);
+  await db.pool.end();
+});
