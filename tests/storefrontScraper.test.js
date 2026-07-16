@@ -48,3 +48,36 @@ test('discoverListings recovers from a transiently-empty page instead of truncat
   const urls = await discoverListings('https://www.dotmed.com/webstore/999', ['equipment']);
   assert.equal(urls.length, 230, 'must include the retried page (100-199), not stop at the transient empty response');
 });
+
+test('discoverListings does not stop early when a page has a same-page duplicate href', async (t) => {
+  const originalEnsureSession = dotmedAuth.ensureSession;
+  const originalFetch = global.fetch;
+
+  dotmedAuth.ensureSession = async () => ['session=fake'];
+
+  function pageHtml(indexes) {
+    return indexes.map((i) => `<a href="/listing/x/y/${i}">l</a>`).join('');
+  }
+
+  global.fetch = async (url) => {
+    const offset = Number(new URL(url).searchParams.get('offset'));
+    if (offset === 0) {
+      // 100 raw hrefs on this page, but index 0 is linked twice (e.g. a
+      // "related items" sidebar) — only 99 unique paths after dedup.
+      const indexes = [0, ...Array.from({ length: 99 }, (_, i) => i)];
+      return { text: async () => pageHtml(indexes) };
+    }
+    if (offset === 100) {
+      return { text: async () => pageHtml(Array.from({ length: 30 }, (_, i) => 100 + i)) };
+    }
+    return { text: async () => '' };
+  };
+
+  t.after(() => {
+    dotmedAuth.ensureSession = originalEnsureSession;
+    global.fetch = originalFetch;
+  });
+
+  const urls = await discoverListings('https://www.dotmed.com/webstore/888', ['equipment']);
+  assert.equal(urls.length, 129, 'a same-page duplicate href must not be mistaken for end-of-list (99 unique + 30 more)');
+});

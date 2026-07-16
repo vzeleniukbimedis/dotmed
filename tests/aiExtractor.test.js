@@ -40,6 +40,29 @@ test('extractListingData surfaces the provider error detail on HTTP failure', as
   );
 });
 
+test('extractListingData backs off briefly on HTTP 429 before propagating the error', async (t) => {
+  const originalFetch = global.fetch;
+  const originalBackoff = process.env.AI_RATE_LIMIT_BACKOFF_MS;
+  process.env.MODEL_NAME = 'rate-limited-model';
+  process.env.AI_RATE_LIMIT_BACKOFF_MS = '40';
+  delete process.env.MODEL_NAME_FALLBACK;
+
+  global.fetch = async () => mockChatResponse(429, { status: 429, title: 'Too Many Requests' });
+
+  t.after(() => {
+    global.fetch = originalFetch;
+    if (originalBackoff === undefined) delete process.env.AI_RATE_LIMIT_BACKOFF_MS;
+    else process.env.AI_RATE_LIMIT_BACKOFF_MS = originalBackoff;
+  });
+
+  const start = Date.now();
+  await assert.rejects(
+    () => extractListingData('# markdown', 'https://example.com/1'),
+    /HTTP 429/,
+  );
+  assert.ok(Date.now() - start >= 40, 'must pause for the backoff window before the error surfaces');
+});
+
 test('extractListingData throws a distinct error on invalid JSON content', async (t) => {
   const originalFetch = global.fetch;
   process.env.MODEL_NAME = 'test-model';

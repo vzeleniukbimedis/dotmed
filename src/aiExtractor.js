@@ -13,6 +13,16 @@ function getTimeoutMs() {
   return Number(process.env.AI_REQUEST_TIMEOUT_MS) || 30_000;
 }
 
+// Seen in production: the provider rate-limits a specific model under load
+// from the job queue processing items back-to-back with no gaps. A brief
+// pause here gives its per-minute window room before the next attempt
+// (whole-scrape retry or the fallback model) fires.
+function getRateLimitBackoffMs() {
+  return Number(process.env.AI_RATE_LIMIT_BACKOFF_MS) || 3_000;
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 function schemaFieldLines(schema) {
   return Object.entries(schema.properties)
     .map(([key, def]) => `- "${key}" (${def.type}): ${def.description}`)
@@ -72,6 +82,9 @@ async function callModel(model, markdown) {
 
   if (!res.ok) {
     const detail = body?.error?.message || JSON.stringify(body).slice(0, 300);
+    if (res.status === 429) {
+      await sleep(getRateLimitBackoffMs());
+    }
     throw new Error(`Виклик до моделі "${model}" не вдався (HTTP ${res.status}): ${detail}`);
   }
 

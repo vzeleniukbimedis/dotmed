@@ -19,10 +19,14 @@ function isBlockedOrLoggedOut(html) {
   return isChallenged || isLoginPage;
 }
 
+// Returns both the deduped urls (a listing can be linked twice on the same
+// rendered page, e.g. a "related items" sidebar) and the raw href count —
+// pagination must stop based on the raw count, since deduping can drop a
+// page's count below LISTINGS_PER_PAGE even when many more pages remain.
 function extractListingLinks(html) {
-  const matches = html.matchAll(/href="(\/listing\/[^"]+)"/g);
-  const paths = [...new Set([...matches].map((m) => m[1]))];
-  return paths.map((p) => `https://www.dotmed.com${p}`);
+  const paths = [...html.matchAll(/href="(\/listing\/[^"]+)"/g)].map((m) => m[1]);
+  const uniquePaths = [...new Set(paths)];
+  return { rawCount: paths.length, urls: uniquePaths.map((p) => `https://www.dotmed.com${p}`) };
 }
 
 async function fetchStorePage(sellerId, type, offset, cookies) {
@@ -51,23 +55,23 @@ async function fetchTypeListings(sellerId, type, cookies) {
       }
     }
 
-    let links = extractListingLinks(html);
+    let { rawCount, urls: links } = extractListingLinks(html);
 
     // dotmed.com's webstore endpoint is flaky: an offset can transiently
     // return 0 results and then return a full page again at the very same
     // offset a moment later. Treating a single empty page as "end of list"
     // silently truncates large storefronts, so retry before giving up.
-    if (links.length === 0) {
-      for (let attempt = 1; attempt <= EMPTY_PAGE_RETRIES && links.length === 0; attempt++) {
+    if (rawCount === 0) {
+      for (let attempt = 1; attempt <= EMPTY_PAGE_RETRIES && rawCount === 0; attempt++) {
         await sleep(EMPTY_PAGE_RETRY_DELAY_MS);
         html = await fetchStorePage(sellerId, type, offset, cookies);
-        links = extractListingLinks(html);
+        ({ rawCount, urls: links } = extractListingLinks(html));
       }
     }
 
     urls.push(...links);
 
-    if (links.length < LISTINGS_PER_PAGE) break;
+    if (rawCount < LISTINGS_PER_PAGE) break;
     offset += LISTINGS_PER_PAGE;
   }
   return urls;
