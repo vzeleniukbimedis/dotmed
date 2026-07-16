@@ -5,6 +5,11 @@ const logger = require('./logger').child({ module: 'firecrawlClient' });
 
 const FIRECRAWL_URL = process.env.FIRECRAWL_URL || 'http://localhost:3002';
 const MAX_ATTEMPTS = 3;
+// Firecrawl renders the page in a real browser, so this needs more headroom
+// than a plain AI call — but it's still a hang guard: without it a stalled
+// (not erroring) Firecrawl request blocks this worker, and every job queued
+// behind it, forever.
+const REQUEST_TIMEOUT_MS = 45_000;
 
 function isBlockedResponse(data) {
   const statusCode = data?.metadata?.statusCode;
@@ -30,15 +35,29 @@ function isEmptyExtraction(result) {
 // no surfaced error — see github.com/firecrawl/firecrawl/issues/1656). We
 // extract structured data ourselves via aiExtractor so failures are visible.
 async function requestScrape(url) {
-  const res = await fetch(`${FIRECRAWL_URL}/v1/scrape`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      url,
-      formats: ['markdown'],
-      onlyMainContent: true,
-    }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  let res;
+  try {
+    res = await fetch(`${FIRECRAWL_URL}/v1/scrape`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url,
+        formats: ['markdown'],
+        onlyMainContent: true,
+      }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new Error(`Firecrawl не відповів за ${REQUEST_TIMEOUT_MS / 1000}с`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   let body;
   try {

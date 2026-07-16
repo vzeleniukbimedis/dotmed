@@ -5,6 +5,12 @@ const logger = require('./logger').child({ module: 'aiExtractor' });
 // headroom while keeping requests small and within any model's context limit.
 const MAX_MARKDOWN_CHARS = 12000;
 
+// Real model responses measured at 3-20s — this is a hang guard, not a
+// latency budget. Without it, a stalled (not erroring) provider request
+// blocks the single-concurrency worker forever, and now blocks every other
+// queued job behind it too.
+const REQUEST_TIMEOUT_MS = 30_000;
+
 function schemaFieldLines(schema) {
   return Object.entries(schema.properties)
     .map(([key, def]) => `- "${key}" (${def.type}): ${def.description}`)
@@ -23,22 +29,36 @@ function buildSystemPrompt(schema) {
 
 async function callModel(model, markdown) {
   const baseUrl = (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
-  const res = await fetch(`${baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: buildSystemPrompt(LISTING_SCHEMA) },
-        { role: 'user', content: markdown.slice(0, MAX_MARKDOWN_CHARS) },
-      ],
-      response_format: { type: 'json_object' },
-      temperature: 0,
-    }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  let res;
+  try {
+    res = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: buildSystemPrompt(LISTING_SCHEMA) },
+          { role: 'user', content: markdown.slice(0, MAX_MARKDOWN_CHARS) },
+        ],
+        response_format: { type: 'json_object' },
+        temperature: 0,
+      }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new Error(`AI-провайдер не відповів за ${REQUEST_TIMEOUT_MS / 1000}с (модель "${model}")`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   let body;
   try {
