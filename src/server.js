@@ -7,6 +7,7 @@ const { isStorefrontUrl } = require('./dotmedParser');
 const { discoverListings } = require('./storefrontScraper');
 const { verifyGoogleToken, getAllowlist, requireAuth } = require('./auth');
 const settingsStore = require('./settingsStore');
+const logger = require('./logger').child({ module: 'server' });
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -131,7 +132,7 @@ app.post('/api/jobs', async (req, res) => {
   }
 
   const job = await jobStore.createJob(entries, req.session.user.email);
-  runJob(job).catch((err) => console.error('Job failed:', err));
+  runJob(job).catch((err) => logger.error({ jobId: job.id, err }, 'job failed'));
   res.json({ jobId: job.id });
 });
 
@@ -157,7 +158,7 @@ app.get('/api/jobs/:id', async (req, res) => {
 app.post('/api/jobs/:id/resume', async (req, res) => {
   const job = await loadOwnedJob(req, res);
   if (!job) return;
-  resumeJob(job).catch((err) => console.error('Resume failed:', err));
+  resumeJob(job).catch((err) => logger.error({ jobId: job.id, err }, 'resume failed'));
   res.json({ ...job, runState: getRunState(job.id) });
 });
 
@@ -197,13 +198,13 @@ async function recoverInterruptedJobs() {
   for (const jobId of jobIds) {
     const job = await jobStore.loadJob(jobId);
     if (!job) continue;
-    console.log(`Recovering job ${jobId} interrupted by a previous restart/crash`);
-    resumeJob(job).catch((err) => console.error(`Auto-recovery failed for job ${jobId}:`, err));
+    logger.info({ jobId }, 'recovering job interrupted by a previous restart/crash');
+    resumeJob(job).catch((err) => logger.error({ jobId, err }, 'auto-recovery failed'));
   }
 }
 
-recoverInterruptedJobs().catch((err) => console.error('Startup recovery failed:', err));
+recoverInterruptedJobs().catch((err) => logger.error({ err }, 'startup recovery failed'));
 
 app.listen(PORT, () => {
-  console.log(`DOTmed parser running at http://localhost:${PORT}`);
+  logger.info({ port: PORT }, 'DOTmed parser running');
 });

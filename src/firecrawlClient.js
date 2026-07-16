@@ -1,5 +1,6 @@
 const { LISTING_SCHEMA, extractPhotos } = require('./dotmedParser');
 const proxyRotator = require('./proxyRotator');
+const logger = require('./logger').child({ module: 'firecrawlClient' });
 
 const FIRECRAWL_URL = process.env.FIRECRAWL_URL || 'http://localhost:3002';
 const MAX_ATTEMPTS = 3;
@@ -54,7 +55,7 @@ async function scrapeListing(url, onProgress = () => {}) {
       data = await requestScrape(url);
     } catch (err) {
       lastError = err;
-      console.error(`[scrapeListing] ${url} attempt ${attempt}/${MAX_ATTEMPTS} request failed: ${err.message}`);
+      logger.error({ url, attempt, maxAttempts: MAX_ATTEMPTS, err }, 'scrape request failed');
       if (attempt < MAX_ATTEMPTS) {
         onProgress({ stage: 'retrying', attempt, maxAttempts: MAX_ATTEMPTS });
       }
@@ -75,10 +76,17 @@ async function scrapeListing(url, onProgress = () => {}) {
         return result;
       }
 
-      console.error(
-        `[scrapeListing] ${url} attempt ${attempt}/${MAX_ATTEMPTS} empty extraction — `
-        + `status=${statusCode}, markdown_len=${markdownLen}, photos=${result.photos.length}, `
-        + `json_keys=${Object.keys(data?.json || {}).join(',') || 'none'}`,
+      logger.error(
+        {
+          url,
+          attempt,
+          maxAttempts: MAX_ATTEMPTS,
+          statusCode,
+          markdownLen,
+          photos: result.photos.length,
+          jsonKeys: Object.keys(data?.json || {}),
+        },
+        'empty extraction',
       );
       lastError = new Error(
         `Порожній результат сканування (HTTP ${statusCode}, markdown ${markdownLen} символів, фото ${result.photos.length})`,
@@ -89,7 +97,7 @@ async function scrapeListing(url, onProgress = () => {}) {
       continue;
     }
 
-    console.error(`[scrapeListing] ${url} attempt ${attempt}/${MAX_ATTEMPTS} blocked by Cloudflare (status=${statusCode})`);
+    logger.error({ url, attempt, maxAttempts: MAX_ATTEMPTS, statusCode }, 'blocked by Cloudflare');
     lastError = new Error('Заблоковано Cloudflare (security verification)');
     if (attempt < MAX_ATTEMPTS) {
       onProgress({ stage: 'rotating_ip', attempt, maxAttempts: MAX_ATTEMPTS });

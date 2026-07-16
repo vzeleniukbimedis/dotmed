@@ -1,5 +1,6 @@
 const { scrapeListing } = require('./firecrawlClient');
 const jobStore = require('./jobStore');
+const logger = require('./logger').child({ module: 'jobRunner' });
 
 const CONCURRENCY = 1;
 const PAUSE_POLL_MS = 500;
@@ -59,7 +60,7 @@ async function processItem(job, item) {
   try {
     item.data = await scrapeListing(item.url, (progress) => {
       item.stageLabel = progressLabel(progress);
-      jobStore.saveJob(job).catch((err) => console.error('Progress save failed:', err));
+      jobStore.saveJob(job).catch((err) => logger.error({ jobId: job.id, url: item.url, err }, 'progress save failed'));
     });
     item.status = 'success';
     delete item.error;
@@ -68,7 +69,7 @@ async function processItem(job, item) {
     item.status = 'error';
     item.error = err.message;
     delete item.stageLabel;
-    console.error(`Scrape failed for ${item.url}:`, err.stack || err.message);
+    logger.error({ jobId: job.id, url: item.url, err }, 'scrape failed');
   }
   item.finishedAt = new Date().toISOString();
   await jobStore.saveJob(job);
