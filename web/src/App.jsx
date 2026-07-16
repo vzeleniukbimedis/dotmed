@@ -10,7 +10,7 @@ import SettingsPage from './pages/SettingsPage.jsx';
 import {
   createJob, getJob, listJobs,
   pauseJob as pauseJobApi, unpauseJob as unpauseJobApi, stopJob as stopJobApi,
-  resumeJob as resumeJobApi, deleteJobItem,
+  resumeJob as resumeJobApi, deleteJobItem, deleteJob as deleteJobApi,
 } from './lib/api.js';
 import { fetchMe, loginWithGoogle, logout } from './lib/auth.js';
 
@@ -166,6 +166,16 @@ export default function App() {
     }
   }
 
+  async function handleDeleteJob(jobId) {
+    await deleteJobApi(jobId);
+    if (job?.id === jobId) {
+      clearInterval(pollRef.current);
+      clearInterval(tickRef.current);
+      setJob(null);
+    }
+    listJobs().then(setHistory).catch(() => {});
+  }
+
   async function handleLoadMoreItems() {
     if (!job) return;
     const nextLimit = itemsLimit + ITEMS_PAGE_SIZE;
@@ -279,6 +289,7 @@ export default function App() {
               jobs={history}
               activeJobId={job?.id}
               onSelectJob={(id) => { handleSelectHistory(id); setActivePage('scanner'); }}
+              onDeleteJob={handleDeleteJob}
             />
           )}
           {activePage === 'team' && <TeamPage key="team" />}

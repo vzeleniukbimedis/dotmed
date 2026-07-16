@@ -62,6 +62,31 @@ test('listJobs summary counts success/error correctly', async () => {
   assert.equal(summary.error, 1);
 });
 
+test('markPendingAsStopped only touches pending items, leaving success/error alone', async () => {
+  const job = await jobStore.createJob(
+    ['https://www.dotmed.com/listing/a/1', 'https://www.dotmed.com/listing/a/2', 'https://www.dotmed.com/listing/a/3'],
+    OWNER_A,
+  );
+  job.items[0].status = 'success';
+  await jobStore.saveJob(job);
+
+  await jobStore.markPendingAsStopped(job.id);
+
+  const loaded = await jobStore.loadJob(job.id);
+  assert.equal(loaded.items[0].status, 'success', 'already-finished items must not be touched');
+  assert.equal(loaded.items[1].status, 'stopped');
+  assert.equal(loaded.items[2].status, 'stopped');
+  assert.equal(loaded.counts.stopped, 2);
+});
+
+test('deleteJob removes the job and cascades to its items', async () => {
+  const job = await jobStore.createJob(['https://www.dotmed.com/listing/a/1'], OWNER_A);
+  await jobStore.deleteJob(job.id);
+
+  const loaded = await jobStore.loadJob(job.id);
+  assert.equal(loaded, null);
+});
+
 test.after(async () => {
   await db.query('DELETE FROM jobs WHERE owner_email IN ($1, $2)', [OWNER_A, OWNER_B]);
   await db.pool.end();

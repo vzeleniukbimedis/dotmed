@@ -20,10 +20,10 @@ const cardVariants = {
 
 function JobControls({ job, onPause, onUnpause, onStop, onResumeStopped }) {
   if (!job) return null;
-  // resumeJob() retries both 'pending' and 'error' items — the button must
-  // show for either, not just pending, or finished-with-failures jobs have
+  // resumeJob() retries 'pending', 'error', and 'stopped' items — the button
+  // must show for any of these, or finished-with-failures/stopped jobs have
   // no way back in even though a retry is one click away on the backend.
-  const hasRetryable = (job.counts?.pending ?? 0) + (job.counts?.error ?? 0) > 0;
+  const hasRetryable = (job.counts?.pending ?? 0) + (job.counts?.error ?? 0) + (job.counts?.stopped ?? 0) > 0;
   const runState = job.runState || 'idle';
 
   if (runState === 'running') {

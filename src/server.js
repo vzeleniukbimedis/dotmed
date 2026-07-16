@@ -211,7 +211,7 @@ app.post('/api/jobs/:id/unpause', async (req, res) => {
 
 app.post('/api/jobs/:id/stop', async (req, res) => {
   if (!(await checkOwnership(req, res))) return;
-  stopJob(req.params.id);
+  await stopJob(req.params.id);
   res.json({ runState: getRunState(req.params.id) });
 });
 
@@ -220,6 +220,13 @@ app.delete('/api/jobs/:id/items', async (req, res) => {
   const { url } = req.body || {};
   if (!url) return res.status(400).json({ error: 'Missing url' });
   await jobStore.deleteItem(req.params.id, url);
+  res.json({ ok: true });
+});
+
+app.delete('/api/jobs/:id', async (req, res) => {
+  if (!(await checkOwnership(req, res))) return;
+  await stopJob(req.params.id); // cancel first if still queued/running
+  await jobStore.deleteJob(req.params.id);
   res.json({ ok: true });
 });
 

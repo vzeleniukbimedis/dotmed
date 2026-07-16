@@ -1,4 +1,4 @@
-import { PackageSearch, TriangleAlert, Trash2 } from 'lucide-react';
+import { PackageSearch, TriangleAlert, Trash2, Square } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 const FIELD_LABELS = [
@@ -60,12 +60,29 @@ function ErrorCard({ url, error, onDelete }) {
   );
 }
 
+function StoppedCard({ url, onDelete }) {
+  return (
+    <div className="card card-stopped">
+      <div className="card-body">
+        <div className="card-header">
+          <h3><Square size={12} />{url}</h3>
+          {onDelete && <DeleteButton onClick={() => onDelete(url)} />}
+        </div>
+        <p>Зупинено до сканування</p>
+      </div>
+    </div>
+  );
+}
+
 export default function ListingCard({ item, onDelete }) {
   if (item.status === 'pending' || item.status === 'running') {
     return <PendingCard item={item} />;
   }
   if (item.status === 'error') {
     return <ErrorCard url={item.url} error={item.error} onDelete={onDelete} />;
+  }
+  if (item.status === 'stopped') {
+    return <StoppedCard url={item.url} onDelete={onDelete} />;
   }
 
   const d = item.data;

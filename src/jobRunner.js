@@ -13,6 +13,7 @@ const controls = new Map();
 // 429 rate-limit fix. Jobs beyond the active one wait here in creation order.
 const queue = []; // [{ job, items }]
 let activeJobId = null;
+let activeJob = null; // the actual job object saveJob() reads from — see stopJob
 
 function getControl(jobId) {
   if (!controls.has(jobId)) controls.set(jobId, { paused: false, stopped: false });
@@ -46,16 +47,31 @@ function unpauseJob(jobId) {
   if (c) c.paused = false;
 }
 
-function stopJob(jobId) {
+// Persists the stop to the DB (see jobStore.markPendingAsStopped) — without
+// this, a stopped job's leftover 'pending' items are indistinguishable from
+// a crash-interrupted job after a restart, and would get wrongly auto-resumed.
+// Also mirrors the change onto the in-memory job object still held by the
+// active processItem()/runItems() closure — saveJob() always rewrites every
+// item from that in-memory array, so without this the next save (e.g. when
+// the currently-scraping item finishes) would clobber the DB's 'stopped'
+// status back to the stale in-memory 'pending'.
+async function stopJob(jobId) {
   const queuedIdx = queue.findIndex((q) => q.job.id === jobId);
   if (queuedIdx !== -1) {
     queue.splice(queuedIdx, 1); // cancel before it ever starts
+    await jobStore.markPendingAsStopped(jobId);
     return;
   }
   if (activeJobId !== jobId) return;
   const c = getControl(jobId);
   c.stopped = true;
   c.paused = false;
+  if (activeJob) {
+    for (const item of activeJob.items) {
+      if (item.status === 'pending') item.status = 'stopped';
+    }
+  }
+  await jobStore.markPendingAsStopped(jobId);
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -125,12 +141,14 @@ async function processQueue() {
   if (activeJobId !== null || queue.length === 0) return;
   const { job, items } = queue.shift();
   activeJobId = job.id;
+  activeJob = job;
   try {
     await runItems(job, items);
   } catch (err) {
     logger.error({ jobId: job.id, err }, 'queued job run failed');
   } finally {
     activeJobId = null;
+    activeJob = null;
     processQueue();
   }
 }
@@ -140,7 +158,7 @@ function runJob(job) {
 }
 
 function resumeJob(job) {
-  enqueue(job, job.items.filter((i) => i.status === 'pending' || i.status === 'error'));
+  enqueue(job, job.items.filter((i) => i.status === 'pending' || i.status === 'error' || i.status === 'stopped'));
 }
 
 module.exports = { runJob, resumeJob, pauseJob, unpauseJob, stopJob, getRunState, getQueuePosition };

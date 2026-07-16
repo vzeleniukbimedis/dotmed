@@ -1,5 +1,5 @@
 export default function StatsBar({ counts }) {
-  const { total, success, error, parts, pending: pendingCount, running } = counts;
+  const { total, success, error, parts, pending: pendingCount, running, stopped = 0 } = counts;
   const pending = pendingCount + running;
 
   const vitals = [
@@ -8,6 +8,7 @@ export default function StatsBar({ counts }) {
     { label: 'Помилки', value: error, tone: error > 0 ? 'error' : undefined },
     { label: 'Запчастини', value: parts },
     { label: 'В процесі', value: pending, tone: pending > 0 ? 'pending' : undefined },
+    ...(stopped > 0 ? [{ label: 'Зупинено', value: stopped, tone: 'pending' }] : []),
   ];
 
   return (

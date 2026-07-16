@@ -70,6 +70,7 @@ async function loadJob(id, { offset = 0, limit } = {}) {
             COUNT(*) FILTER (WHERE status = 'error')::int AS error,
             COUNT(*) FILTER (WHERE status = 'pending')::int AS pending,
             COUNT(*) FILTER (WHERE status = 'running')::int AS running,
+            COUNT(*) FILTER (WHERE status = 'stopped')::int AS stopped,
             COUNT(*) FILTER (WHERE status = 'success' AND (data->>'isPart')::boolean IS TRUE)::int AS parts
      FROM job_items WHERE job_id = $1`,
     [id],
@@ -100,6 +101,20 @@ async function getJobOwner(id) {
 
 async function deleteItem(jobId, url) {
   await db.query('DELETE FROM job_items WHERE job_id = $1 AND url = $2', [jobId, url]);
+}
+
+// job_items has ON DELETE CASCADE on job_id, so this removes the whole job.
+async function deleteJob(jobId) {
+  await db.query('DELETE FROM jobs WHERE id = $1', [jobId]);
+}
+
+// A user-initiated stop must be durable — without persisting it, the still-
+// 'pending' items look identical to a crash-interrupted job after a restart,
+// and findIncompleteJobs() would wrongly auto-resume a job the user stopped
+// on purpose. 'stopped' items are excluded from that recovery scan, and are
+// picked back up only by an explicit resume.
+async function markPendingAsStopped(jobId) {
+  await db.query(`UPDATE job_items SET status = 'stopped' WHERE job_id = $1 AND status = 'pending'`, [jobId]);
 }
 
 // Two cases need recovery at boot: (1) an item still marked 'running' is a
@@ -144,4 +159,6 @@ async function listJobs(ownerEmail) {
   }));
 }
 
-module.exports = { createJob, saveJob, loadJob, listJobs, deleteItem, findIncompleteJobs, getJobOwner };
+module.exports = {
+  createJob, saveJob, loadJob, listJobs, deleteItem, deleteJob, findIncompleteJobs, getJobOwner, markPendingAsStopped,
+};

@@ -802,6 +802,28 @@ a.source-link {
 
 .card.card-error p { color: var(--error); margin: 6px 0 0; }
 
+/* ---------- Stopped card ---------- */
+
+.card.card-stopped { border-left: 2px solid var(--warn); }
+
+.card.card-stopped .card-body {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.card.card-stopped h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.card.card-stopped p { color: var(--warn); margin: 6px 0 0; }
+
 /* ---------- Pending card: scan sweep ---------- */
 
 .card.card-pending {
@@ -894,18 +916,42 @@ a.source-link {
 .history-page-row {
   width: 100%;
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  gap: 12px;
   background: var(--surface);
   border: 1px solid var(--border);
   color: var(--text);
   font-weight: 400;
   border-radius: 4px;
   padding: 14px 16px;
-  text-align: left;
 }
 
 .history-page-row.active { border-color: var(--text); }
+
+.history-page-row-main {
+  flex: 1;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.history-page-delete-btn {
+  padding: 6px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.history-page-delete-btn:hover:not(:disabled) {
+  color: var(--error);
+  border-color: var(--error);
+}
 
 .job-history-date {
   font-family: var(--font-mono);

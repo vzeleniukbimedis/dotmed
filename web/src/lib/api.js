@@ -68,6 +68,13 @@ export async function listJobs() {
   return body.jobs;
 }
 
+export async function deleteJob(jobId) {
+  const res = await fetch(`/api/jobs/${jobId}`, { method: 'DELETE' });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || 'Request failed');
+  return body;
+}
+
 export async function getSettings() {
   const res = await fetch('/api/settings');
   const body = await res.json();

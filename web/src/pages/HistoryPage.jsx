@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { History as HistoryIcon } from 'lucide-react';
+import { History as HistoryIcon, Trash2 } from 'lucide-react';
 import PageHeader from '../components/PageHeader.jsx';
 
 function formatDate(iso) {
@@ -13,7 +13,7 @@ function runStateLabel(job) {
   return null;
 }
 
-export default function HistoryPage({ jobs, activeJobId, onSelectJob }) {
+export default function HistoryPage({ jobs, activeJobId, onSelectJob, onDeleteJob }) {
   return (
     <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.18 }}>
       <PageHeader icon={HistoryIcon} title="Історія задач" subtitle="Усі попередні сканування — клікни, щоб переглянути результат" />
@@ -27,18 +27,31 @@ export default function HistoryPage({ jobs, activeJobId, onSelectJob }) {
         <ul className="history-page-list">
           {jobs.map((job) => (
             <li key={job.id}>
-              <motion.button
-                whileHover={{ scale: 1.01 }}
-                whileTap={{ scale: 0.99 }}
-                className={`history-page-row ${job.id === activeJobId ? 'active' : ''}`}
-                onClick={() => onSelectJob(job.id)}
-              >
-                <span className="job-history-date">{formatDate(job.createdAt)}</span>
-                {runStateLabel(job) && <span className="job-history-runstate">{runStateLabel(job)}</span>}
-                <span className="job-history-stats">
-                  {job.total} · <span className="ok">{job.success}</span> / <span className="fail">{job.error}</span>
-                </span>
-              </motion.button>
+              <div className={`history-page-row ${job.id === activeJobId ? 'active' : ''}`}>
+                <motion.button
+                  whileHover={{ scale: 1.01 }}
+                  whileTap={{ scale: 0.99 }}
+                  className="history-page-row-main"
+                  onClick={() => onSelectJob(job.id)}
+                >
+                  <span className="job-history-date">{formatDate(job.createdAt)}</span>
+                  {runStateLabel(job) && <span className="job-history-runstate">{runStateLabel(job)}</span>}
+                  <span className="job-history-stats">
+                    {job.total} · <span className="ok">{job.success}</span> / <span className="fail">{job.error}</span>
+                  </span>
+                </motion.button>
+                {onDeleteJob && (
+                  <motion.button
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    className="secondary history-page-delete-btn"
+                    onClick={() => onDeleteJob(job.id)}
+                    title="Видалити задачу"
+                  >
+                    <Trash2 size={13} />
+                  </motion.button>
+                )}
+              </div>
             </li>
           ))}
         </ul>
