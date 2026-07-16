@@ -31,6 +31,10 @@ async function fetchStorePage(sellerId, type, offset, cookies) {
   return res.text();
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const EMPTY_PAGE_RETRIES = 3;
+const EMPTY_PAGE_RETRY_DELAY_MS = 1500;
+
 async function fetchTypeListings(sellerId, type, cookies) {
   const urls = [];
   let offset = 0;
@@ -44,7 +48,20 @@ async function fetchTypeListings(sellerId, type, cookies) {
       }
     }
 
-    const links = extractListingLinks(html);
+    let links = extractListingLinks(html);
+
+    // dotmed.com's webstore endpoint is flaky: an offset can transiently
+    // return 0 results and then return a full page again at the very same
+    // offset a moment later. Treating a single empty page as "end of list"
+    // silently truncates large storefronts, so retry before giving up.
+    if (links.length === 0) {
+      for (let attempt = 1; attempt <= EMPTY_PAGE_RETRIES && links.length === 0; attempt++) {
+        await sleep(EMPTY_PAGE_RETRY_DELAY_MS);
+        html = await fetchStorePage(sellerId, type, offset, cookies);
+        links = extractListingLinks(html);
+      }
+    }
+
     urls.push(...links);
 
     if (links.length < LISTINGS_PER_PAGE) break;

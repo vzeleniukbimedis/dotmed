@@ -71,6 +71,23 @@ async function loadJob(id) {
   };
 }
 
+async function deleteItem(jobId, url) {
+  await db.query('DELETE FROM job_items WHERE job_id = $1 AND url = $2', [jobId, url]);
+}
+
+// Any item still marked 'running' when the process starts is a leftover from
+// a previous crash/restart — nothing is actively processing it anymore, so it
+// would otherwise be stuck forever. Reset it to 'pending' and hand back the
+// affected job ids so the caller can resume processing automatically.
+async function recoverOrphanedItems() {
+  const { rows } = await db.query(
+    `UPDATE job_items SET status = 'pending', stage_label = NULL, started_at = NULL
+     WHERE status = 'running'
+     RETURNING job_id`,
+  );
+  return [...new Set(rows.map((r) => r.job_id))];
+}
+
 async function listJobs(ownerEmail) {
   const { rows } = await db.query(
     `SELECT j.id, j.created_at,
@@ -93,4 +110,4 @@ async function listJobs(ownerEmail) {
   }));
 }
 
-module.exports = { createJob, saveJob, loadJob, listJobs };
+module.exports = { createJob, saveJob, loadJob, listJobs, deleteItem, recoverOrphanedItems };

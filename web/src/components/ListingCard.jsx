@@ -1,3 +1,6 @@
+import { PackageSearch, TriangleAlert, Trash2 } from 'lucide-react';
+import { motion } from 'framer-motion';
+
 const FIELD_LABELS = [
   ['brand', 'Бренд'],
   ['model', 'Модель'],
@@ -16,6 +19,20 @@ function elapsedLabel(startedAt) {
   return `${s}с`;
 }
 
+function DeleteButton({ onClick }) {
+  return (
+    <motion.button
+      whileHover={{ scale: 1.05 }}
+      whileTap={{ scale: 0.95 }}
+      className="secondary card-delete-btn"
+      onClick={onClick}
+      title="Видалити з результатів"
+    >
+      <Trash2 size={13} />
+    </motion.button>
+  );
+}
+
 function PendingCard({ item }) {
   const elapsed = elapsedLabel(item.startedAt);
   return (
@@ -29,23 +46,26 @@ function PendingCard({ item }) {
   );
 }
 
-function ErrorCard({ url, error }) {
+function ErrorCard({ url, error, onDelete }) {
   return (
     <div className="card card-error">
       <div className="card-body">
-        <h3>{url}</h3>
+        <div className="card-header">
+          <h3><TriangleAlert size={13} className="error-icon" />{url}</h3>
+          {onDelete && <DeleteButton onClick={() => onDelete(url)} />}
+        </div>
         <p>{error}</p>
       </div>
     </div>
   );
 }
 
-export default function ListingCard({ item }) {
+export default function ListingCard({ item, onDelete }) {
   if (item.status === 'pending' || item.status === 'running') {
     return <PendingCard item={item} />;
   }
   if (item.status === 'error') {
-    return <ErrorCard url={item.url} error={item.error} />;
+    return <ErrorCard url={item.url} error={item.error} onDelete={onDelete} />;
   }
 
   const d = item.data;
@@ -54,12 +74,15 @@ export default function ListingCard({ item }) {
       <div className="card-body">
         <div className="card-header">
           <h3>{d.title || item.url}</h3>
-          {d.isPart && (
-            <span className="status-tag">
-              <span className="dot" />
-              Запчастина
-            </span>
-          )}
+          <div className="card-header-actions">
+            {d.isPart && (
+              <span className="status-tag">
+                <PackageSearch size={12} />
+                Запчастина
+              </span>
+            )}
+            {onDelete && <DeleteButton onClick={() => onDelete(item.url)} />}
+          </div>
         </div>
 
         {d.photos?.length > 0 && (

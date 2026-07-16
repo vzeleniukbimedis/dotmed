@@ -4,5 +4,6 @@ public/
 web/node_modules/
 web/dist/
 .env
+web/.env
 .claude/
 .idea/

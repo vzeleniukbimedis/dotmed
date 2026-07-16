@@ -30,9 +30,15 @@ async function requestScrape(url) {
     }),
   });
 
-  const body = await res.json();
+  let body;
+  try {
+    body = await res.json();
+  } catch {
+    throw new Error(`Firecrawl повернув не-JSON відповідь (HTTP ${res.status})`);
+  }
   if (!res.ok || !body.success) {
-    throw new Error(body.error || `Firecrawl request failed (${res.status})`);
+    const detail = body?.error ? `: ${body.error}` : '';
+    throw new Error(`Firecrawl request failed (HTTP ${res.status})${detail}`);
   }
   return body.data;
 }
@@ -48,11 +54,15 @@ async function scrapeListing(url, onProgress = () => {}) {
       data = await requestScrape(url);
     } catch (err) {
       lastError = err;
+      console.error(`[scrapeListing] ${url} attempt ${attempt}/${MAX_ATTEMPTS} request failed: ${err.message}`);
       if (attempt < MAX_ATTEMPTS) {
         onProgress({ stage: 'retrying', attempt, maxAttempts: MAX_ATTEMPTS });
       }
       continue;
     }
+
+    const statusCode = data?.metadata?.statusCode;
+    const markdownLen = (data?.markdown || '').length;
 
     if (!isBlockedResponse(data)) {
       const result = {
@@ -65,13 +75,21 @@ async function scrapeListing(url, onProgress = () => {}) {
         return result;
       }
 
-      lastError = new Error('Порожній результат сканування (сторінка не завантажилась або AI не витягнув дані)');
+      console.error(
+        `[scrapeListing] ${url} attempt ${attempt}/${MAX_ATTEMPTS} empty extraction — `
+        + `status=${statusCode}, markdown_len=${markdownLen}, photos=${result.photos.length}, `
+        + `json_keys=${Object.keys(data?.json || {}).join(',') || 'none'}`,
+      );
+      lastError = new Error(
+        `Порожній результат сканування (HTTP ${statusCode}, markdown ${markdownLen} символів, фото ${result.photos.length})`,
+      );
       if (attempt < MAX_ATTEMPTS) {
         onProgress({ stage: 'retrying', attempt, maxAttempts: MAX_ATTEMPTS });
       }
       continue;
     }
 
+    console.error(`[scrapeListing] ${url} attempt ${attempt}/${MAX_ATTEMPTS} blocked by Cloudflare (status=${statusCode})`);
     lastError = new Error('Заблоковано Cloudflare (security verification)');
     if (attempt < MAX_ATTEMPTS) {
       onProgress({ stage: 'rotating_ip', attempt, maxAttempts: MAX_ATTEMPTS });

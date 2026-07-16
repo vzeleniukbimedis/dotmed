@@ -16,6 +16,45 @@ export async function getJob(jobId) {
   return body;
 }
 
+export async function pauseJob(jobId) {
+  const res = await fetch(`/api/jobs/${jobId}/pause`, { method: 'POST' });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || 'Request failed');
+  return body;
+}
+
+export async function unpauseJob(jobId) {
+  const res = await fetch(`/api/jobs/${jobId}/unpause`, { method: 'POST' });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || 'Request failed');
+  return body;
+}
+
+export async function stopJob(jobId) {
+  const res = await fetch(`/api/jobs/${jobId}/stop`, { method: 'POST' });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || 'Request failed');
+  return body;
+}
+
+export async function resumeJob(jobId) {
+  const res = await fetch(`/api/jobs/${jobId}/resume`, { method: 'POST' });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || 'Request failed');
+  return body;
+}
+
+export async function deleteJobItem(jobId, url) {
+  const res = await fetch(`/api/jobs/${jobId}/items`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || 'Request failed');
+  return body;
+}
+
 export async function listJobs() {
   const res = await fetch('/api/jobs');
   const body = await res.json();

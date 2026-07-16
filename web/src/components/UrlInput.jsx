@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { motion } from 'framer-motion';
+import { ScanLine, Loader2 } from 'lucide-react';
 
 export default function UrlInput({ value, onChange, onSubmit, disabled }) {
   const [includeEquipment, setIncludeEquipment] = useState(true);
@@ -15,7 +17,7 @@ export default function UrlInput({ value, onChange, onSubmit, disabled }) {
   }
 
   return (
-    <div className="panel" id="scanner">
+    <div className="panel">
       <label className="panel-label" htmlFor="url-input">Лінки на оголошення або на продавця</label>
       <textarea
         id="url-input"
@@ -46,9 +48,18 @@ export default function UrlInput({ value, onChange, onSubmit, disabled }) {
         </label>
       </div>
       <div className="panel-actions">
-        <button onClick={handleSubmit} disabled={disabled || (!includeEquipment && !includeParts)}>
-          {disabled ? 'Сканування…' : 'Сканувати'}
-        </button>
+        <motion.button
+          whileHover={disabled ? {} : { scale: 1.02 }}
+          whileTap={disabled ? {} : { scale: 0.97 }}
+          onClick={handleSubmit}
+          disabled={disabled || (!includeEquipment && !includeParts)}
+        >
+          {disabled ? (
+            <><Loader2 size={14} className="spin" /> Сканування…</>
+          ) : (
+            <><ScanLine size={14} /> Сканувати</>
+          )}
+        </motion.button>
       </div>
     </div>
   );

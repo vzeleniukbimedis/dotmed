@@ -1,30 +1,39 @@
 import { useEffect, useRef, useState } from 'react';
-import Navbar from './components/Navbar.jsx';
+import { AnimatePresence } from 'framer-motion';
+import { Menu, X } from 'lucide-react';
+import Sidebar from './components/Sidebar.jsx';
 import LoginGate from './components/LoginGate.jsx';
-import JobHistory from './components/JobHistory.jsx';
-import SettingsPanel from './components/SettingsPanel.jsx';
-import UrlInput from './components/UrlInput.jsx';
-import StatsBar from './components/StatsBar.jsx';
-import ProgressBar from './components/ProgressBar.jsx';
-import ListingCard from './components/ListingCard.jsx';
-import ExportButtons from './components/ExportButtons.jsx';
-import Help from './components/Help.jsx';
-import { createJob, getJob, listJobs } from './lib/api.js';
+import ScannerPage from './pages/ScannerPage.jsx';
+import HistoryPage from './pages/HistoryPage.jsx';
+import TeamPage from './pages/TeamPage.jsx';
+import SettingsPage from './pages/SettingsPage.jsx';
+import {
+  createJob, getJob, listJobs,
+  pauseJob as pauseJobApi, unpauseJob as unpauseJobApi, stopJob as stopJobApi,
+  resumeJob as resumeJobApi, deleteJobItem,
+} from './lib/api.js';
 import { fetchMe, loginWithGoogle, logout } from './lib/auth.js';
 
 const POLL_INTERVAL_MS = 1500;
 const TICK_INTERVAL_MS = 1000;
+
+function getInitialTheme() {
+  return document.documentElement.getAttribute('data-theme') || 'light';
+}
 
 export default function App() {
   const [authState, setAuthState] = useState('loading'); // loading | anon | authed
   const [user, setUser] = useState(null);
   const [authError, setAuthError] = useState(null);
   const [history, setHistory] = useState([]);
-  const [showSettings, setShowSettings] = useState(false);
+  const [activePage, setActivePage] = useState('scanner');
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [theme, setTheme] = useState(getInitialTheme);
 
   const [job, setJob] = useState(null);
   const [error, setError] = useState(null);
   const [urlsText, setUrlsText] = useState('');
+  const [submitting, setSubmitting] = useState(false);
   const [, setTick] = useState(0);
   const pollRef = useRef(null);
   const tickRef = useRef(null);
@@ -91,6 +100,7 @@ export default function App() {
 
   async function handleSubmit(urls, types) {
     setError(null);
+    setSubmitting(true);
     try {
       const jobId = await createJob(urls, types);
       const j = await getJob(jobId);
@@ -98,6 +108,8 @@ export default function App() {
       startPolling(jobId);
     } catch (err) {
       setError(err.message);
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -107,51 +119,115 @@ export default function App() {
     if (isRunning(j)) startPolling(jobId);
   }
 
+  async function handlePause() {
+    if (!job) return;
+    await pauseJobApi(job.id);
+    setJob(await getJob(job.id));
+  }
+
+  async function handleUnpause() {
+    if (!job) return;
+    await unpauseJobApi(job.id);
+    const j = await getJob(job.id);
+    setJob(j);
+    if (isRunning(j)) startPolling(job.id);
+  }
+
+  async function handleStop() {
+    if (!job) return;
+    await stopJobApi(job.id);
+    setJob(await getJob(job.id));
+  }
+
+  async function handleResumeStopped() {
+    if (!job) return;
+    await resumeJobApi(job.id);
+    const j = await getJob(job.id);
+    setJob(j);
+    startPolling(job.id);
+  }
+
+  async function handleDeleteItem(url) {
+    if (!job) return;
+    const updated = await deleteJobItem(job.id, url);
+    setJob(updated);
+  }
+
+  function handleNavigate(page) {
+    setActivePage(page);
+    setMobileNavOpen(false);
+  }
+
+  function handleToggleTheme() {
+    const next = theme === 'dark' ? 'light' : 'dark';
+    setTheme(next);
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('theme', next);
+  }
+
   if (authState === 'loading') {
     return <div className="app-loading" />;
   }
 
   if (authState === 'anon') {
-    return (
-      <div className="app">
-        <Navbar user={null} />
-        <LoginGate onLogin={handleLogin} error={authError} />
-      </div>
-    );
+    return <LoginGate onLogin={handleLogin} error={authError} />;
   }
 
   const items = job?.items || [];
-  const running = isRunning(job);
+  const running = isRunning(job) || submitting;
 
   return (
-    <div className="app">
-      <Navbar user={user} onLogout={handleLogout} onOpenSettings={() => setShowSettings(true)} />
+    <div className="shell">
+      <Sidebar
+        activePage={activePage}
+        onNavigate={handleNavigate}
+        user={user}
+        onLogout={handleLogout}
+        theme={theme}
+        onToggleTheme={handleToggleTheme}
+        mobileOpen={mobileNavOpen}
+      />
+      {mobileNavOpen && <div className="sidebar-backdrop" onClick={() => setMobileNavOpen(false)} />}
 
-      <main className="content">
-        <JobHistory jobs={history} onSelect={handleSelectHistory} activeJobId={job?.id} />
+      <div className="topbar">
+        <button className="hamburger-btn" onClick={() => setMobileNavOpen((o) => !o)} aria-label="Меню">
+          {mobileNavOpen ? <X size={20} /> : <Menu size={20} />}
+        </button>
+        <span className="logo-text">Parser</span>
+      </div>
 
-        <UrlInput value={urlsText} onChange={setUrlsText} onSubmit={handleSubmit} disabled={running} />
-
-        {error && <p className="error-text">Помилка: {error}</p>}
-
-        <StatsBar items={items} />
-        {job && <ProgressBar items={items} createdAt={job.createdAt} />}
-        <ExportButtons items={items} />
-
-        {items.length === 0 ? (
-          <p className="empty-state">Немає даних. Встав лінки вище і натисни «Сканувати».</p>
-        ) : (
-          <div className="results-grid">
-            {items.map((item) => (
-              <ListingCard key={item.url} item={item} />
-            ))}
-          </div>
-        )}
-
-        <Help />
+      <main className="shell-content">
+        <AnimatePresence mode="wait">
+          {activePage === 'scanner' && (
+            <ScannerPage
+              key="scanner"
+              urlsText={urlsText}
+              onUrlsChange={setUrlsText}
+              onSubmit={handleSubmit}
+              submitting={submitting}
+              running={running}
+              error={error}
+              job={job}
+              items={items}
+              onPause={handlePause}
+              onUnpause={handleUnpause}
+              onStop={handleStop}
+              onResumeStopped={handleResumeStopped}
+              onDeleteItem={handleDeleteItem}
+            />
+          )}
+          {activePage === 'history' && (
+            <HistoryPage
+              key="history"
+              jobs={history}
+              activeJobId={job?.id}
+              onSelectJob={(id) => { handleSelectHistory(id); setActivePage('scanner'); }}
+            />
+          )}
+          {activePage === 'team' && <TeamPage key="team" />}
+          {activePage === 'settings' && <SettingsPage key="settings" />}
+        </AnimatePresence>
       </main>
-
-      {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
     </div>
   );
 }
