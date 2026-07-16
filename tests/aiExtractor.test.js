@@ -2,6 +2,11 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { extractListingData } = require('../src/aiExtractor');
 
+// Constant across every test below — only MODEL_NAME/MODEL_NAME_FALLBACK
+// (and the AI_PROVIDER2_* set, where used) vary per test.
+process.env.OPENAI_BASE_URL = 'https://example-provider.test/v1';
+process.env.OPENAI_API_KEY = 'test-key';
+
 function mockChatResponse(status, body) {
   return {
     ok: status >= 200 && status < 300,
@@ -175,6 +180,34 @@ test('extractListingData throws a timeout error instead of hanging forever', asy
     () => extractListingData('# markdown', 'https://example.com/1'),
     /не відповів/,
   );
+});
+
+test('extractListingData moves to the next provider when provider 1 fails outright', async (t) => {
+  const originalFetch = global.fetch;
+  process.env.MODEL_NAME = 'p1-model';
+  delete process.env.MODEL_NAME_FALLBACK;
+  process.env.AI_PROVIDER2_BASE_URL = 'https://provider2.test/v1';
+  process.env.AI_PROVIDER2_API_KEY = 'p2-key';
+  process.env.AI_PROVIDER2_MODEL = 'p2-model';
+
+  global.fetch = async (url) => {
+    if (url.startsWith('https://example-provider.test')) {
+      return mockChatResponse(500, { error: { message: 'provider 1 down' } });
+    }
+    return mockChatResponse(200, {
+      choices: [{ message: { content: JSON.stringify({ title: 'Provider 2 Title', condition: '', description: '', isPart: false }) } }],
+    });
+  };
+
+  t.after(() => {
+    global.fetch = originalFetch;
+    delete process.env.AI_PROVIDER2_BASE_URL;
+    delete process.env.AI_PROVIDER2_API_KEY;
+    delete process.env.AI_PROVIDER2_MODEL;
+  });
+
+  const result = await extractListingData('# markdown', 'https://example.com/1');
+  assert.equal(result.title, 'Provider 2 Title');
 });
 
 test('extractListingData returns the primary all-empty result when there is no fallback configured', async (t) => {

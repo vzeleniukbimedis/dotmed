@@ -13,22 +13,50 @@ function getTimeoutMs() {
   return Number(process.env.AI_REQUEST_TIMEOUT_MS) || 30_000;
 }
 
-// Seen in production: the provider rate-limits a specific model under load
-// from the job queue processing items back-to-back with no gaps. A brief
-// pause here gives its per-minute window room before the next attempt
-// (whole-scrape retry or the fallback model) fires.
+// Seen in production: a provider rate-limits under load from the job queue
+// processing items back-to-back with no gaps. A brief pause here gives its
+// per-minute window room before the next attempt (next model, or the next
+// provider entirely) fires.
 function getRateLimitBackoffMs() {
   return Number(process.env.AI_RATE_LIMIT_BACKOFF_MS) || 3_000;
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Captured live from each real API response — providers like Mistral send
-// their actual per-minute request/token budget on every call, so this is
-// real usage data rather than a hardcoded guess at plan limits.
+// Multiple independent AI providers, tried in order — when one is rate-
+// limited, out of quota, or down, extraction automatically moves to the
+// next. Provider 1 keeps the original env var names for backward
+// compatibility; providers 2+ follow AI_PROVIDER{n}_*.
+function getProviders() {
+  const providers = [];
+
+  if (process.env.OPENAI_BASE_URL && process.env.OPENAI_API_KEY && process.env.MODEL_NAME) {
+    const models = [process.env.MODEL_NAME];
+    if (process.env.MODEL_NAME_FALLBACK) models.push(process.env.MODEL_NAME_FALLBACK);
+    providers.push({ name: 'provider1', baseUrl: process.env.OPENAI_BASE_URL, apiKey: process.env.OPENAI_API_KEY, models });
+  }
+
+  for (let i = 2; i <= 9; i++) {
+    const baseUrl = process.env[`AI_PROVIDER${i}_BASE_URL`];
+    const apiKey = process.env[`AI_PROVIDER${i}_API_KEY`];
+    const model = process.env[`AI_PROVIDER${i}_MODEL`];
+    if (!baseUrl || !apiKey || !model) continue;
+
+    const models = [model];
+    const fallback = process.env[`AI_PROVIDER${i}_MODEL_FALLBACK`];
+    if (fallback) models.push(fallback);
+    providers.push({ name: `provider${i}`, baseUrl, apiKey, models });
+  }
+
+  return providers;
+}
+
+// Captured live from each real API response — providers like Mistral/Groq
+// send their actual per-minute request/token budget on every call, so this
+// is real usage data rather than a hardcoded guess at plan limits.
 let lastRateLimitInfo = null;
 
-function captureRateLimitHeaders(model, res) {
+function captureRateLimitHeaders(providerName, model, res) {
   const get = (name) => res.headers.get(name);
   const limitReq = get('x-ratelimit-limit-req-minute') ?? get('x-ratelimit-limit-requests');
   const remainingReq = get('x-ratelimit-remaining-req-minute') ?? get('x-ratelimit-remaining-requests');
@@ -37,6 +65,7 @@ function captureRateLimitHeaders(model, res) {
   if (limitReq == null && limitTokens == null) return; // provider doesn't expose these
 
   lastRateLimitInfo = {
+    provider: providerName,
     model,
     limitRequestsPerMinute: limitReq != null ? Number(limitReq) : null,
     remainingRequestsPerMinute: remainingReq != null ? Number(remainingReq) : null,
@@ -66,8 +95,8 @@ function buildSystemPrompt(schema) {
   ].join('\n');
 }
 
-async function callModel(model, markdown) {
-  const baseUrl = (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
+async function callModel(provider, model, markdown) {
+  const baseUrl = provider.baseUrl.replace(/\/+$/, '');
   const timeoutMs = getTimeoutMs();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -78,7 +107,7 @@ async function callModel(model, markdown) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        Authorization: `Bearer ${provider.apiKey}`,
       },
       body: JSON.stringify({
         model,
@@ -93,20 +122,20 @@ async function callModel(model, markdown) {
     });
   } catch (err) {
     if (err.name === 'AbortError') {
-      throw new Error(`AI-провайдер не відповів за ${timeoutMs / 1000}с (модель "${model}")`);
+      throw new Error(`AI-провайдер не відповів за ${timeoutMs / 1000}с (${provider.name}, модель "${model}")`);
     }
     throw err;
   } finally {
     clearTimeout(timeout);
   }
 
-  captureRateLimitHeaders(model, res);
+  captureRateLimitHeaders(provider.name, model, res);
 
   let body;
   try {
     body = await res.json();
   } catch {
-    throw new Error(`Провайдер повернув не-JSON відповідь (HTTP ${res.status}, модель "${model}")`);
+    throw new Error(`Провайдер повернув не-JSON відповідь (HTTP ${res.status}, ${provider.name}, модель "${model}")`);
   }
 
   if (!res.ok) {
@@ -114,52 +143,56 @@ async function callModel(model, markdown) {
     if (res.status === 429) {
       await sleep(getRateLimitBackoffMs());
     }
-    throw new Error(`Виклик до моделі "${model}" не вдався (HTTP ${res.status}): ${detail}`);
+    throw new Error(`Виклик до ${provider.name} (${model}) не вдався (HTTP ${res.status}): ${detail}`);
   }
 
   const content = body?.choices?.[0]?.message?.content;
   if (!content) {
-    throw new Error(`Модель "${model}" не повернула вміст відповіді`);
+    throw new Error(`${provider.name} (${model}) не повернув вміст відповіді`);
   }
 
   try {
     return JSON.parse(content);
   } catch (err) {
-    throw new Error(`Модель "${model}" повернула невалідний JSON: ${err.message}`);
+    throw new Error(`${provider.name} (${model}) повернув невалідний JSON: ${err.message}`);
   }
 }
 
 // Matches firecrawlClient's isEmptyExtraction signal fields — a model can
 // return HTTP 200 with syntactically valid JSON whose fields are simply
-// blank, which isn't an exception and must still trigger the fallback.
+// blank, which isn't an exception and must still trigger the next attempt.
 function isEmptyResult(json) {
   return !(json?.title || json?.brand || json?.description);
 }
 
+// Tries every configured model on every configured provider, in order,
+// stopping at the first real (non-empty) success. A provider that's out of
+// quota, rate-limited, or down just gets skipped in favor of the next one.
 async function extractListingData(markdown, url) {
-  const primaryModel = process.env.MODEL_NAME || 'gpt-4';
-  const fallbackModel = process.env.MODEL_NAME_FALLBACK;
-
-  let primaryResult;
-  try {
-    primaryResult = await callModel(primaryModel, markdown);
-    if (!isEmptyResult(primaryResult)) return primaryResult;
-    logger.error({ url, model: primaryModel }, 'primary model returned valid but all-empty JSON');
-  } catch (err) {
-    logger.error({ url, model: primaryModel, err }, 'primary model extraction failed');
-    if (!fallbackModel) throw err;
+  const providers = getProviders();
+  if (providers.length === 0) {
+    throw new Error('Не налаштовано жодного AI-провайдера (OPENAI_BASE_URL/OPENAI_API_KEY/MODEL_NAME)');
   }
 
-  if (!fallbackModel) return primaryResult;
+  let lastEmptyResult;
+  let lastError;
 
-  logger.info({ url, model: fallbackModel }, 'retrying extraction with fallback model');
-  try {
-    return await callModel(fallbackModel, markdown);
-  } catch (fallbackErr) {
-    logger.error({ url, model: fallbackModel, err: fallbackErr }, 'fallback model extraction failed');
-    if (primaryResult !== undefined) return primaryResult;
-    throw fallbackErr;
+  for (const provider of providers) {
+    for (const model of provider.models) {
+      try {
+        const result = await callModel(provider, model, markdown);
+        if (!isEmptyResult(result)) return result;
+        lastEmptyResult = result;
+        logger.error({ url, provider: provider.name, model }, 'returned valid but all-empty JSON');
+      } catch (err) {
+        lastError = err;
+        logger.error({ url, provider: provider.name, model, err }, 'extraction attempt failed');
+      }
+    }
   }
+
+  if (lastEmptyResult !== undefined) return lastEmptyResult;
+  throw lastError;
 }
 
-module.exports = { extractListingData, buildSystemPrompt, getRateLimitInfo };
+module.exports = { extractListingData, buildSystemPrompt, getRateLimitInfo, getProviders };
