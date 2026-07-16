@@ -20,7 +20,10 @@ const cardVariants = {
 
 function JobControls({ job, onPause, onUnpause, onStop, onResumeStopped }) {
   if (!job) return null;
-  const hasPending = (job.counts?.pending ?? 0) > 0;
+  // resumeJob() retries both 'pending' and 'error' items — the button must
+  // show for either, not just pending, or finished-with-failures jobs have
+  // no way back in even though a retry is one click away on the backend.
+  const hasRetryable = (job.counts?.pending ?? 0) + (job.counts?.error ?? 0) > 0;
   const runState = job.runState || 'idle';
 
   if (runState === 'running') {
@@ -49,11 +52,11 @@ function JobControls({ job, onPause, onUnpause, onStop, onResumeStopped }) {
     );
   }
 
-  if (hasPending) {
+  if (hasRetryable) {
     return (
       <div className="job-controls">
         <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }} onClick={onResumeStopped}>
-          <Play size={14} /> Відновити сканування
+          <Play size={14} /> Повторити невдалі ({job.counts?.error ?? 0}) / продовжити
         </motion.button>
       </div>
     );

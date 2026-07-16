@@ -98,7 +98,9 @@ async function scrapeListing(url, onProgress = () => {}) {
           statusCode,
           markdownLen,
           photos: result.photos.length,
-          jsonKeys: Object.keys(data?.json || {}),
+          json: data?.json,
+          warning: data?.warning,
+          changeTracking: data?.changeTracking,
         },
         'empty extraction',
       );
