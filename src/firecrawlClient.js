@@ -1,5 +1,6 @@
-const { LISTING_SCHEMA, extractPhotos } = require('./dotmedParser');
+const { extractPhotos } = require('./dotmedParser');
 const proxyRotator = require('./proxyRotator');
+const aiExtractor = require('./aiExtractor');
 const logger = require('./logger').child({ module: 'firecrawlClient' });
 
 const FIRECRAWL_URL = process.env.FIRECRAWL_URL || 'http://localhost:3002';
@@ -23,14 +24,18 @@ function isEmptyExtraction(result) {
   return !(result.title || result.brand || result.description);
 }
 
+// Firecrawl only fetches/renders the page here — we no longer ask its
+// internal jsonOptions.schema extraction to do anything, since that step is
+// an opaque self-hosted black box (known to silently return empty JSON with
+// no surfaced error — see github.com/firecrawl/firecrawl/issues/1656). We
+// extract structured data ourselves via aiExtractor so failures are visible.
 async function requestScrape(url) {
   const res = await fetch(`${FIRECRAWL_URL}/v1/scrape`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       url,
-      formats: ['markdown', 'json'],
-      jsonOptions: { schema: LISTING_SCHEMA },
+      formats: ['markdown'],
       onlyMainContent: true,
     }),
   });
@@ -67,7 +72,7 @@ async function scrapeListing(url, onProgress = () => {}) {
     }
 
     const statusCode = data?.metadata?.statusCode;
-    const markdownLen = (data?.markdown || '').length;
+    const markdown = data?.markdown || '';
 
     if (isRateLimited(data)) {
       logger.error({ url, attempt, maxAttempts: MAX_ATTEMPTS, statusCode }, 'rate limited (429)');
@@ -79,45 +84,39 @@ async function scrapeListing(url, onProgress = () => {}) {
       continue;
     }
 
-    if (!isBlockedResponse(data)) {
-      const result = {
-        url,
-        ...data.json,
-        photos: extractPhotos(data.markdown || ''),
-      };
+    if (isBlockedResponse(data)) {
+      logger.error({ url, attempt, maxAttempts: MAX_ATTEMPTS, statusCode }, 'blocked by Cloudflare');
+      lastError = new Error('Заблоковано Cloudflare (security verification)');
+      if (attempt < MAX_ATTEMPTS) {
+        onProgress({ stage: 'rotating_ip', attempt, maxAttempts: MAX_ATTEMPTS });
+        await proxyRotator.rotateIp();
+      }
+      continue;
+    }
+
+    onProgress({ stage: 'extracting', attempt, maxAttempts: MAX_ATTEMPTS });
+    try {
+      const json = await aiExtractor.extractListingData(markdown, url);
+      const result = { url, ...json, photos: extractPhotos(markdown) };
 
       if (!isEmptyExtraction(result)) {
         return result;
       }
 
       logger.error(
-        {
-          url,
-          attempt,
-          maxAttempts: MAX_ATTEMPTS,
-          statusCode,
-          markdownLen,
-          photos: result.photos.length,
-          json: data?.json,
-          warning: data?.warning,
-          changeTracking: data?.changeTracking,
-        },
-        'empty extraction',
+        { url, attempt, maxAttempts: MAX_ATTEMPTS, statusCode, markdownLen: markdown.length, photos: result.photos.length, json },
+        'AI returned all-empty fields',
       );
       lastError = new Error(
-        `Порожній результат сканування (HTTP ${statusCode}, markdown ${markdownLen} символів, фото ${result.photos.length})`,
+        `AI повернув порожні поля (HTTP ${statusCode}, markdown ${markdown.length} символів, фото ${result.photos.length})`,
       );
-      if (attempt < MAX_ATTEMPTS) {
-        onProgress({ stage: 'retrying', attempt, maxAttempts: MAX_ATTEMPTS });
-      }
-      continue;
+    } catch (err) {
+      logger.error({ url, attempt, maxAttempts: MAX_ATTEMPTS, err }, 'AI extraction call failed');
+      lastError = new Error(`AI-екстракція не вдалась: ${err.message}`);
     }
 
-    logger.error({ url, attempt, maxAttempts: MAX_ATTEMPTS, statusCode }, 'blocked by Cloudflare');
-    lastError = new Error('Заблоковано Cloudflare (security verification)');
     if (attempt < MAX_ATTEMPTS) {
-      onProgress({ stage: 'rotating_ip', attempt, maxAttempts: MAX_ATTEMPTS });
-      await proxyRotator.rotateIp();
+      onProgress({ stage: 'retrying', attempt, maxAttempts: MAX_ATTEMPTS });
     }
   }
 
