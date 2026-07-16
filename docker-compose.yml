@@ -1,0 +1,125 @@
+name: dotmed-stack
+
+x-firecrawl-env: &firecrawl-env
+  REDIS_URL: redis://redis:6379
+  REDIS_RATE_LIMIT_URL: redis://redis:6379
+  PLAYWRIGHT_MICROSERVICE_URL: http://playwright-service:3000/scrape
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: postgres
+  POSTGRES_DB: postgres
+  POSTGRES_HOST: nuq-postgres
+  POSTGRES_PORT: 5432
+  USE_DB_AUTHENTICATION: "false"
+  NUM_WORKERS_PER_QUEUE: ${NUM_WORKERS_PER_QUEUE:-8}
+  CRAWL_CONCURRENT_REQUESTS: ${CRAWL_CONCURRENT_REQUESTS:-10}
+  MAX_CONCURRENT_JOBS: ${MAX_CONCURRENT_JOBS:-5}
+  BROWSER_POOL_SIZE: ${BROWSER_POOL_SIZE:-5}
+  OPENAI_API_KEY: ${OPENAI_API_KEY}
+  OPENAI_BASE_URL: ${OPENAI_BASE_URL}
+  BULL_AUTH_KEY: ${BULL_AUTH_KEY}
+  PROXY_SERVER: ${PROXY_SERVER}
+  PROXY_USERNAME: ${PROXY_USERNAME}
+  PROXY_PASSWORD: ${PROXY_PASSWORD}
+  NUQ_RABBITMQ_URL: amqp://rabbitmq:5672
+  HARNESS_STARTUP_TIMEOUT_MS: 60000
+  ENV: local
+  HOST: "0.0.0.0"
+  PORT: 3002
+
+services:
+  # ---------- DOTmed Parser (public) ----------
+  dotmed-parser:
+    build:
+      context: .
+      args:
+        GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+    environment:
+      PORT: 4000
+      NODE_ENV: production
+      FIRECRAWL_URL: http://api:3002
+      DATABASE_URL: postgresql://postgres:${DOTMED_POSTGRES_PASSWORD:-postgres}@dotmed-postgres:5432/dotmed
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      SESSION_SECRET: ${SESSION_SECRET}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      ALLOWED_GOOGLE_EMAILS: ${ALLOWED_GOOGLE_EMAILS}
+      DOTMED_EMAIL: ${DOTMED_EMAIL}
+      DOTMED_PASSWORD: ${DOTMED_PASSWORD}
+      PROXY_CHANGE_IP_URL: ${PROXY_CHANGE_IP_URL}
+    ports:
+      - "${PORT:-4000}:4000"
+    volumes:
+      - dotmed-data:/app/data
+    depends_on:
+      dotmed-postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+  dotmed-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DOTMED_POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: dotmed
+    volumes:
+      - dotmed-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ---------- Self-hosted Firecrawl (internal only, no public port) ----------
+  api:
+    image: ghcr.io/firecrawl/firecrawl
+    environment:
+      <<: *firecrawl-env
+    depends_on:
+      redis:
+        condition: service_started
+      playwright-service:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    command: node dist/src/harness.js --start-docker
+    restart: unless-stopped
+
+  playwright-service:
+    image: ghcr.io/firecrawl/playwright-service:latest
+    environment:
+      PORT: 3000
+      PROXY_SERVER: ${PROXY_SERVER}
+      PROXY_USERNAME: ${PROXY_USERNAME}
+      PROXY_PASSWORD: ${PROXY_PASSWORD}
+      MAX_CONCURRENT_PAGES: ${CRAWL_CONCURRENT_REQUESTS:-10}
+    restart: unless-stopped
+
+  redis:
+    image: redis:alpine
+    command: redis-server --bind 0.0.0.0
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    command: rabbitmq-server
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  nuq-postgres:
+    image: ghcr.io/firecrawl/nuq-postgres:latest
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    restart: unless-stopped
+
+volumes:
+  dotmed-data:
+  dotmed-postgres-data:

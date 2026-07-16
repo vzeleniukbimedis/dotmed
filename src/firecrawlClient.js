@@ -1,0 +1,85 @@
+const { LISTING_SCHEMA, extractPhotos } = require('./dotmedParser');
+const proxyRotator = require('./proxyRotator');
+
+const FIRECRAWL_URL = process.env.FIRECRAWL_URL || 'http://localhost:3002';
+const MAX_ATTEMPTS = 3;
+
+function isBlockedResponse(data) {
+  const statusCode = data?.metadata?.statusCode;
+  const markdown = data?.markdown || '';
+  return statusCode === 403
+    && (markdown.includes('Performing security verification') || markdown.includes('malicious bots'));
+}
+
+function isEmptyExtraction(result) {
+  // Photos come from a separate markdown regex, not the AI extraction — their
+  // presence doesn't prove the AI actually returned structured data. Require
+  // a real extracted field regardless of whether photos were found.
+  return !(result.title || result.brand || result.description);
+}
+
+async function requestScrape(url) {
+  const res = await fetch(`${FIRECRAWL_URL}/v1/scrape`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      url,
+      formats: ['markdown', 'json'],
+      jsonOptions: { schema: LISTING_SCHEMA },
+      onlyMainContent: true,
+    }),
+  });
+
+  const body = await res.json();
+  if (!res.ok || !body.success) {
+    throw new Error(body.error || `Firecrawl request failed (${res.status})`);
+  }
+  return body.data;
+}
+
+async function scrapeListing(url, onProgress = () => {}) {
+  let lastError;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    onProgress({ stage: 'scraping', attempt, maxAttempts: MAX_ATTEMPTS });
+
+    let data;
+    try {
+      data = await requestScrape(url);
+    } catch (err) {
+      lastError = err;
+      if (attempt < MAX_ATTEMPTS) {
+        onProgress({ stage: 'retrying', attempt, maxAttempts: MAX_ATTEMPTS });
+      }
+      continue;
+    }
+
+    if (!isBlockedResponse(data)) {
+      const result = {
+        url,
+        ...data.json,
+        photos: extractPhotos(data.markdown || ''),
+      };
+
+      if (!isEmptyExtraction(result)) {
+        return result;
+      }
+
+      lastError = new Error('Порожній результат сканування (сторінка не завантажилась або AI не витягнув дані)');
+      if (attempt < MAX_ATTEMPTS) {
+        onProgress({ stage: 'retrying', attempt, maxAttempts: MAX_ATTEMPTS });
+      }
+      continue;
+    }
+
+    lastError = new Error('Заблоковано Cloudflare (security verification)');
+    if (attempt < MAX_ATTEMPTS) {
+      onProgress({ stage: 'rotating_ip', attempt, maxAttempts: MAX_ATTEMPTS });
+      await proxyRotator.rotateIp();
+    }
+  }
+
+  throw new Error(`Не вдалось відсканувати після ${MAX_ATTEMPTS} спроб: ${lastError.message}`);
+}
+
+module.exports = { scrapeListing, isBlockedResponse };

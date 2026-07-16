@@ -1,0 +1,8 @@
+node_modules/
+data/
+public/
+web/node_modules/
+web/dist/
+.env
+.claude/
+.idea/
