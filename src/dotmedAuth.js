@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { ProxyAgent } = require('undici');
 const { getSetting } = require('./settingsStore');
 const proxyRotator = require('./proxyRotator');
 const logger = require('./logger').child({ module: 'dotmedAuth' });
@@ -16,6 +17,24 @@ const BROWSER_HEADERS = {
   Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.9',
 };
+
+// Without this, requests leave the container on its own datacenter IP —
+// rotateIp() would be pointless since it only rotates the IP *behind* this
+// proxy, not the container's own address. Same proxy the Firecrawl scraper uses.
+function buildProxyDispatcher() {
+  const uri = process.env.PROXY_SERVER;
+  if (!uri) {
+    logger.warn('PROXY_SERVER not set — login requests will go out on the container\'s own IP');
+    return undefined;
+  }
+  const opts = { uri };
+  if (process.env.PROXY_USERNAME) {
+    opts.token = `Basic ${Buffer.from(`${process.env.PROXY_USERNAME}:${process.env.PROXY_PASSWORD || ''}`).toString('base64')}`;
+  }
+  return new ProxyAgent(opts);
+}
+
+const proxyDispatcher = buildProxyDispatcher();
 
 function parseSetCookies(res) {
   const raw = typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : [];
@@ -36,7 +55,11 @@ function isCloudflareBlock(html, status) {
 async function attemptLogin(email, password) {
   let cookies = [];
 
-  const loginPage = await fetch('https://www.dotmed.com/login', { redirect: 'manual', headers: BROWSER_HEADERS });
+  const loginPage = await fetch('https://www.dotmed.com/login', {
+    redirect: 'manual',
+    headers: BROWSER_HEADERS,
+    dispatcher: proxyDispatcher,
+  });
   cookies = mergeCookies(cookies, parseSetCookies(loginPage));
   logger.debug({ status: loginPage.status, cookieNames: cookies.map((c) => c.split('=')[0]) }, 'fetched login page');
 
@@ -50,6 +73,7 @@ async function attemptLogin(email, password) {
       Cookie: cookies.join('; '),
     },
     body: body.toString(),
+    dispatcher: proxyDispatcher,
   });
   cookies = mergeCookies(cookies, parseSetCookies(res));
   logger.debug(
@@ -60,6 +84,7 @@ async function attemptLogin(email, password) {
   const check = await fetch('https://www.dotmed.com/users/my/', {
     headers: { ...BROWSER_HEADERS, Cookie: cookies.join('; ') },
     redirect: 'follow',
+    dispatcher: proxyDispatcher,
   });
   const html = await check.text();
   const titleMatch = html.match(/<title>([^<]*)<\/title>/i);
@@ -144,4 +169,4 @@ async function invalidateAndRelogin() {
   return login();
 }
 
-module.exports = { ensureSession, login, invalidateAndRelogin, SESSION_PATH };
+module.exports = { ensureSession, login, invalidateAndRelogin, SESSION_PATH, BROWSER_HEADERS, proxyDispatcher };

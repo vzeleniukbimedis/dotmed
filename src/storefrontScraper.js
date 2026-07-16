@@ -27,7 +27,10 @@ function extractListingLinks(html) {
 
 async function fetchStorePage(sellerId, type, offset, cookies) {
   const url = `https://www.dotmed.com/webstore/?user=${sellerId}&type=${type}&mode=all&order=&sort=&listings_per_page=${LISTINGS_PER_PAGE}&offset=${offset}`;
-  const res = await fetch(url, { headers: { Cookie: cookies.join('; ') } });
+  const res = await fetch(url, {
+    headers: { ...dotmedAuth.BROWSER_HEADERS, Cookie: cookies.join('; ') },
+    dispatcher: dotmedAuth.proxyDispatcher,
+  });
   return res.text();
 }
 
