@@ -13,6 +13,22 @@ function getTimeoutMs() {
   return Number(process.env.FIRECRAWL_REQUEST_TIMEOUT_MS) || 45_000;
 }
 
+// Seen repeatedly on redeploy: dotmed-parser boots and auto-resumes queued
+// jobs faster than the sibling Firecrawl container finishes its own startup
+// (depends on redis/rabbitmq/playwright-service), so the first few items hit
+// ECONNREFUSED and burn all 3 attempts almost instantly. A longer pause here
+// (vs. immediate retry) gives Firecrawl real time to finish booting instead
+// of silently error-ing out items that would have succeeded moments later.
+function isConnectionError(err) {
+  return err.code === 'ECONNREFUSED' || err.cause?.code === 'ECONNREFUSED' || /ECONNREFUSED/i.test(err.message);
+}
+
+function getConnectionErrorBackoffMs() {
+  return Number(process.env.FIRECRAWL_CONNECTION_BACKOFF_MS) || 5_000;
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 function isBlockedResponse(data) {
   const statusCode = data?.metadata?.statusCode;
   const markdown = data?.markdown || '';
@@ -89,6 +105,9 @@ async function scrapeListing(url, onProgress = () => {}) {
       logger.error({ url, attempt, maxAttempts: MAX_ATTEMPTS, err }, 'scrape request failed');
       if (attempt < MAX_ATTEMPTS) {
         onProgress({ stage: 'retrying', attempt, maxAttempts: MAX_ATTEMPTS });
+        if (isConnectionError(err)) {
+          await sleep(getConnectionErrorBackoffMs());
+        }
       }
       continue;
     }

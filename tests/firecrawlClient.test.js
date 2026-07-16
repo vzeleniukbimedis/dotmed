@@ -79,6 +79,37 @@ test('scrapeListing rotates the proxy IP and retries on HTTP 429', async (t) => 
   assert.equal(rotateCalls, 1);
 });
 
+test('scrapeListing backs off before retrying a connection-refused failure (Firecrawl still booting)', async (t) => {
+  const originalFetch = global.fetch;
+  const originalExtract = aiExtractor.extractListingData;
+  const originalBackoff = process.env.FIRECRAWL_CONNECTION_BACKOFF_MS;
+  process.env.FIRECRAWL_CONNECTION_BACKOFF_MS = '30';
+
+  let fetchCalls = 0;
+  global.fetch = async () => {
+    fetchCalls++;
+    if (fetchCalls < 2) {
+      const err = new TypeError('fetch failed');
+      err.cause = { code: 'ECONNREFUSED' };
+      throw err;
+    }
+    return firecrawlResponse(200, 'real content');
+  };
+  aiExtractor.extractListingData = async () => ({ title: 'OK', condition: '', description: 'd', isPart: false });
+
+  t.after(() => {
+    global.fetch = originalFetch;
+    aiExtractor.extractListingData = originalExtract;
+    if (originalBackoff === undefined) delete process.env.FIRECRAWL_CONNECTION_BACKOFF_MS;
+    else process.env.FIRECRAWL_CONNECTION_BACKOFF_MS = originalBackoff;
+  });
+
+  const start = Date.now();
+  const result = await scrapeListing('https://www.dotmed.com/listing/x/y/5');
+  assert.equal(result.title, 'OK');
+  assert.ok(Date.now() - start >= 30, 'must pause before retrying after ECONNREFUSED');
+});
+
 test('scrapeListing surfaces the AI extraction call error message on repeated failure', async (t) => {
   const originalFetch = global.fetch;
   const originalExtract = aiExtractor.extractListingData;
