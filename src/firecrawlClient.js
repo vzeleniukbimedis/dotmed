@@ -100,6 +100,7 @@ async function scrapeListing(url, onProgress = () => {}) {
       const result = { url, ...json, photos: extractPhotos(markdown) };
 
       if (!isEmptyExtraction(result)) {
+        logger.info({ url, attempt, title: result.title, photos: result.photos.length }, 'extraction succeeded');
         return result;
       }
 
