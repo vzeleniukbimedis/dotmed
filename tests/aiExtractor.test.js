@@ -123,6 +123,36 @@ test('extractListingData tries the fallback when the primary succeeds but return
   assert.equal(result.title, 'Real Title');
 });
 
+test('extractListingData throws a timeout error instead of hanging forever', async (t) => {
+  const originalFetch = global.fetch;
+  const originalTimeout = process.env.AI_REQUEST_TIMEOUT_MS;
+  process.env.MODEL_NAME = 'slow-model';
+  process.env.AI_REQUEST_TIMEOUT_MS = '50';
+  delete process.env.MODEL_NAME_FALLBACK;
+
+  // Simulates a stalled request that only ever settles when aborted — matches
+  // real fetch()'s behavior under AbortController, unlike a promise that
+  // simply never resolves (which would make this test hang instead of pass).
+  global.fetch = (url, opts) => new Promise((resolve, reject) => {
+    opts.signal.addEventListener('abort', () => {
+      const err = new Error('The operation was aborted.');
+      err.name = 'AbortError';
+      reject(err);
+    });
+  });
+
+  t.after(() => {
+    global.fetch = originalFetch;
+    if (originalTimeout === undefined) delete process.env.AI_REQUEST_TIMEOUT_MS;
+    else process.env.AI_REQUEST_TIMEOUT_MS = originalTimeout;
+  });
+
+  await assert.rejects(
+    () => extractListingData('# markdown', 'https://example.com/1'),
+    /не відповів/,
+  );
+});
+
 test('extractListingData returns the primary all-empty result when there is no fallback configured', async (t) => {
   const originalFetch = global.fetch;
   process.env.MODEL_NAME = 'flaky-model';

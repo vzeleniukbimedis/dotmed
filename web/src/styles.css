@@ -501,6 +501,20 @@ button.secondary:hover:not(:disabled) {
   font-size: 13px;
 }
 
+.info-text {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.queue-label {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+}
+
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { animation: spin 0.8s linear infinite; }
 
@@ -878,6 +892,17 @@ a.source-link {
 
 .job-history-stats .ok { color: var(--ok); }
 .job-history-stats .fail { color: var(--error); }
+
+.job-history-runstate {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--warn);
+  border: 1px solid var(--warn);
+  border-radius: 3px;
+  padding: 2px 6px;
+}
 
 /* ---------- Team page ---------- */
 

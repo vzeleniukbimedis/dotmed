@@ -52,6 +52,18 @@ function JobControls({ job, onPause, onUnpause, onStop, onResumeStopped }) {
     );
   }
 
+  if (runState === 'queued') {
+    const position = job.queuePosition ? ` (${job.queuePosition}-та)` : '';
+    return (
+      <div className="job-controls">
+        <span className="queue-label">У черзі{position}</span>
+        <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }} className="secondary" onClick={onStop}>
+          <Square size={14} /> Скасувати
+        </motion.button>
+      </div>
+    );
+  }
+
   if (hasRetryable) {
     return (
       <div className="job-controls">
@@ -66,7 +78,7 @@ function JobControls({ job, onPause, onUnpause, onStop, onResumeStopped }) {
 }
 
 export default function ScannerPage({
-  urlsText, onUrlsChange, onSubmit, submitting, running, error, job, jobLoading, items,
+  urlsText, onUrlsChange, onSubmit, submitting, running, error, submitInfo, job, jobLoading, items,
   onPause, onUnpause, onStop, onResumeStopped, onDeleteItem, onLoadMoreItems,
 }) {
   const counts = job?.counts;
@@ -79,6 +91,7 @@ export default function ScannerPage({
       <UrlInput value={urlsText} onChange={onUrlsChange} onSubmit={onSubmit} disabled={running} />
 
       {error && <p className="error-text">Помилка: {error}</p>}
+      {submitInfo && <p className="info-text">{submitInfo}</p>}
 
       {counts && <StatsBar counts={counts} />}
       {job && counts && <ProgressBar counts={counts} createdAt={job.createdAt} />}

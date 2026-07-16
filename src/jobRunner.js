@@ -1,4 +1,4 @@
-const { scrapeListing } = require('./firecrawlClient');
+const firecrawlClient = require('./firecrawlClient');
 const jobStore = require('./jobStore');
 const logger = require('./logger').child({ module: 'jobRunner' });
 
@@ -8,29 +8,51 @@ const PAUSE_POLL_MS = 500;
 // jobId -> { paused: boolean, stopped: boolean }
 const controls = new Map();
 
+// Only one job actively scrapes at a time — running several jobs in
+// parallel would hammer dotmed.com with concurrent requests and undo the
+// 429 rate-limit fix. Jobs beyond the active one wait here in creation order.
+const queue = []; // [{ job, items }]
+let activeJobId = null;
+
 function getControl(jobId) {
   if (!controls.has(jobId)) controls.set(jobId, { paused: false, stopped: false });
   return controls.get(jobId);
 }
 
 function getRunState(jobId) {
-  const c = controls.get(jobId);
-  if (!c) return 'idle';
-  if (c.stopped) return 'stopped';
-  if (c.paused) return 'paused';
-  return 'running';
+  if (activeJobId === jobId) {
+    const c = controls.get(jobId);
+    if (c?.stopped) return 'stopped';
+    if (c?.paused) return 'paused';
+    return 'running';
+  }
+  if (queue.some((q) => q.job.id === jobId)) return 'queued';
+  return 'idle';
+}
+
+function getQueuePosition(jobId) {
+  const idx = queue.findIndex((q) => q.job.id === jobId);
+  return idx === -1 ? null : idx + 1;
 }
 
 function pauseJob(jobId) {
+  if (activeJobId !== jobId) return; // not running yet — nothing to pause
   getControl(jobId).paused = true;
 }
 
 function unpauseJob(jobId) {
+  if (activeJobId !== jobId) return;
   const c = controls.get(jobId);
   if (c) c.paused = false;
 }
 
 function stopJob(jobId) {
+  const queuedIdx = queue.findIndex((q) => q.job.id === jobId);
+  if (queuedIdx !== -1) {
+    queue.splice(queuedIdx, 1); // cancel before it ever starts
+    return;
+  }
+  if (activeJobId !== jobId) return;
   const c = getControl(jobId);
   c.stopped = true;
   c.paused = false;
@@ -58,7 +80,7 @@ async function processItem(job, item) {
   await jobStore.saveJob(job);
 
   try {
-    item.data = await scrapeListing(item.url, (progress) => {
+    item.data = await firecrawlClient.scrapeListing(item.url, (progress) => {
       item.stageLabel = progressLabel(progress);
       jobStore.saveJob(job).catch((err) => logger.error({ jobId: job.id, url: item.url, err }, 'progress save failed'));
     });
@@ -94,14 +116,31 @@ async function runItems(job, items) {
   controls.delete(job.id);
 }
 
-async function runJob(job) {
-  const pending = job.items.filter((i) => i.status === 'pending');
-  await runItems(job, pending);
+function enqueue(job, items) {
+  queue.push({ job, items });
+  processQueue();
 }
 
-async function resumeJob(job) {
-  const pending = job.items.filter((i) => i.status === 'pending' || i.status === 'error');
-  await runItems(job, pending);
+async function processQueue() {
+  if (activeJobId !== null || queue.length === 0) return;
+  const { job, items } = queue.shift();
+  activeJobId = job.id;
+  try {
+    await runItems(job, items);
+  } catch (err) {
+    logger.error({ jobId: job.id, err }, 'queued job run failed');
+  } finally {
+    activeJobId = null;
+    processQueue();
+  }
 }
 
-module.exports = { runJob, resumeJob, pauseJob, unpauseJob, stopJob, getRunState };
+function runJob(job) {
+  enqueue(job, job.items.filter((i) => i.status === 'pending'));
+}
+
+function resumeJob(job) {
+  enqueue(job, job.items.filter((i) => i.status === 'pending' || i.status === 'error'));
+}
+
+module.exports = { runJob, resumeJob, pauseJob, unpauseJob, stopJob, getRunState, getQueuePosition };

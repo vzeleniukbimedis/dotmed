@@ -34,12 +34,14 @@ export default function App() {
   const [job, setJob] = useState(null);
   const [jobLoading, setJobLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [submitInfo, setSubmitInfo] = useState(null);
   const [urlsText, setUrlsText] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [itemsLimit, setItemsLimit] = useState(ITEMS_PAGE_SIZE);
   const [, setTick] = useState(0);
   const pollRef = useRef(null);
   const tickRef = useRef(null);
+  const historyPollRef = useRef(null);
   const itemsLimitRef = useRef(ITEMS_PAGE_SIZE);
 
   useEffect(() => {
@@ -61,7 +63,21 @@ export default function App() {
   useEffect(() => () => {
     clearInterval(pollRef.current);
     clearInterval(tickRef.current);
+    clearInterval(historyPollRef.current);
   }, []);
+
+  // Keep History's queued/running/paused badges live while it's the open
+  // page — stops itself once nothing in the list is still in flight.
+  useEffect(() => {
+    clearInterval(historyPollRef.current);
+    const hasActiveJobs = history.some((j) => ['queued', 'running', 'paused'].includes(j.runState));
+    if (activePage === 'history' && hasActiveJobs) {
+      historyPollRef.current = setInterval(() => {
+        listJobs().then(setHistory).catch(() => {});
+      }, 3000);
+    }
+    return () => clearInterval(historyPollRef.current);
+  }, [activePage, history]);
 
   function isRunning(j) {
     if (!j) return false;
@@ -116,13 +132,18 @@ export default function App() {
 
   async function handleSubmit(urls, types) {
     setError(null);
+    setSubmitInfo(null);
     setSubmitting(true);
     setItemsLimit(ITEMS_PAGE_SIZE);
     try {
-      const jobId = await createJob(urls, types);
-      const j = await getJob(jobId, { offset: 0, limit: ITEMS_PAGE_SIZE });
+      const jobIds = await createJob(urls, types);
+      const j = await getJob(jobIds[0], { offset: 0, limit: ITEMS_PAGE_SIZE });
       setJob(j);
-      startPolling(jobId);
+      startPolling(jobIds[0]);
+      if (jobIds.length > 1) {
+        setSubmitInfo(`Створено ${jobIds.length} задач — інші чекають у черзі, дивись Історію.`);
+        listJobs().then(setHistory).catch(() => {});
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -240,6 +261,7 @@ export default function App() {
               submitting={submitting}
               running={running}
               error={error}
+              submitInfo={submitInfo}
               job={job}
               jobLoading={jobLoading}
               items={items}

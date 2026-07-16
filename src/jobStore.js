@@ -102,17 +102,24 @@ async function deleteItem(jobId, url) {
   await db.query('DELETE FROM job_items WHERE job_id = $1 AND url = $2', [jobId, url]);
 }
 
-// Any item still marked 'running' when the process starts is a leftover from
-// a previous crash/restart — nothing is actively processing it anymore, so it
-// would otherwise be stuck forever. Reset it to 'pending' and hand back the
-// affected job ids so the caller can resume processing automatically.
-async function recoverOrphanedItems() {
-  const { rows } = await db.query(
-    `UPDATE job_items SET status = 'pending', stage_label = NULL, started_at = NULL
-     WHERE status = 'running'
-     RETURNING job_id`,
+// Two cases need recovery at boot: (1) an item still marked 'running' is a
+// leftover from a previous crash — nothing is actively processing it anymore
+// — reset it to 'pending'; (2) a job that was sitting in the in-memory run
+// queue when the process restarted never got a chance to start at all, but
+// its items are already 'pending' from creation, so no reset is needed there
+// — it just needs to be found and re-enqueued. Both cases reduce to "does
+// this job have any pending item", ordered by creation so jobs re-enter the
+// queue in their original order rather than all firing in parallel.
+async function findIncompleteJobs() {
+  await db.query(
+    `UPDATE job_items SET status = 'pending', stage_label = NULL, started_at = NULL WHERE status = 'running'`,
   );
-  return [...new Set(rows.map((r) => r.job_id))];
+  const { rows } = await db.query(
+    `SELECT DISTINCT j.id, j.created_at FROM jobs j
+     JOIN job_items ji ON ji.job_id = j.id AND ji.status = 'pending'
+     ORDER BY j.created_at ASC`,
+  );
+  return rows.map((r) => r.id);
 }
 
 async function listJobs(ownerEmail) {
@@ -137,4 +144,4 @@ async function listJobs(ownerEmail) {
   }));
 }
 
-module.exports = { createJob, saveJob, loadJob, listJobs, deleteItem, recoverOrphanedItems, getJobOwner };
+module.exports = { createJob, saveJob, loadJob, listJobs, deleteItem, findIncompleteJobs, getJobOwner };

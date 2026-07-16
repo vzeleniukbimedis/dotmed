@@ -2,7 +2,7 @@ const express = require('express');
 const session = require('express-session');
 const path = require('path');
 const jobStore = require('./jobStore');
-const { runJob, resumeJob, pauseJob, unpauseJob, stopJob, getRunState } = require('./jobRunner');
+const { runJob, resumeJob, pauseJob, unpauseJob, stopJob, getRunState, getQueuePosition } = require('./jobRunner');
 const { isStorefrontUrl } = require('./dotmedParser');
 const { discoverListings } = require('./storefrontScraper');
 const { verifyGoogleToken, getAllowlist, requireAuth } = require('./auth');
@@ -91,27 +91,22 @@ app.put('/api/settings', async (req, res) => {
   res.json(await settingsStore.getAllSettings());
 });
 
-async function expandUrls(urls, types) {
-  const entries = [];
-  for (const url of urls) {
-    if (!isStorefrontUrl(url)) {
-      entries.push({ url });
-      continue;
+async function expandStorefront(url, types) {
+  try {
+    const listingUrls = await discoverListings(url, types);
+    if (listingUrls.length === 0) {
+      return [{ url, error: 'У продавця не знайдено оголошень для обраних типів (Обладнання/Запчастини).' }];
     }
-    try {
-      const listingUrls = await discoverListings(url, types);
-      if (listingUrls.length === 0) {
-        entries.push({ url, error: 'У продавця не знайдено оголошень для обраних типів (Обладнання/Запчастини).' });
-      } else {
-        entries.push(...listingUrls.map((u) => ({ url: u })));
-      }
-    } catch (err) {
-      entries.push({ url, error: err.message });
-    }
+    return listingUrls.map((u) => ({ url: u }));
+  } catch (err) {
+    return [{ url, error: err.message }];
   }
-  return entries;
 }
 
+// Each storefront becomes its own job (independent progress/pause/export);
+// direct listing links submitted together share one job. Jobs run one at a
+// time (see jobRunner's queue) rather than in parallel, so submitting
+// several sellers at once doesn't hammer dotmed.com with concurrent requests.
 app.post('/api/jobs', async (req, res) => {
   const urls = (req.body.urls || [])
     .map((u) => String(u).trim())
@@ -124,20 +119,35 @@ app.post('/api/jobs', async (req, res) => {
     return res.status(400).json({ error: 'No URLs provided' });
   }
 
-  let entries;
+  const storefrontUrls = urls.filter(isStorefrontUrl);
+  const directUrls = urls.filter((u) => !isStorefrontUrl(u));
+
+  let jobIds;
   try {
-    entries = await expandUrls(urls, types);
+    jobIds = [];
+    for (const storefrontUrl of storefrontUrls) {
+      const entries = await expandStorefront(storefrontUrl, types);
+      const job = await jobStore.createJob(entries, req.session.user.email);
+      runJob(job);
+      jobIds.push(job.id);
+    }
+    if (directUrls.length > 0) {
+      const job = await jobStore.createJob(directUrls.map((url) => ({ url })), req.session.user.email);
+      runJob(job);
+      jobIds.push(job.id);
+    }
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
 
-  const job = await jobStore.createJob(entries, req.session.user.email);
-  runJob(job).catch((err) => logger.error({ jobId: job.id, err }, 'job failed'));
-  res.json({ jobId: job.id });
+  res.json({ jobIds });
 });
 
 app.get('/api/jobs', async (req, res) => {
-  res.json({ jobs: await jobStore.listJobs(req.session.user.email) });
+  const jobs = await jobStore.listJobs(req.session.user.email);
+  res.json({
+    jobs: jobs.map((j) => ({ ...j, runState: getRunState(j.id), queuePosition: getQueuePosition(j.id) })),
+  });
 });
 
 // Full job load (with items) — only for routes that actually need the item
@@ -168,13 +178,13 @@ app.get('/api/jobs/:id', async (req, res) => {
   const offset = req.query.offset != null ? parseInt(req.query.offset, 10) : 0;
   const job = await loadOwnedJob(req, res, { offset, limit });
   if (!job) return;
-  res.json({ ...job, runState: getRunState(job.id) });
+  res.json({ ...job, runState: getRunState(job.id), queuePosition: getQueuePosition(job.id) });
 });
 
 app.post('/api/jobs/:id/resume', async (req, res) => {
   const job = await loadOwnedJob(req, res);
   if (!job) return;
-  resumeJob(job).catch((err) => logger.error({ jobId: job.id, err }, 'resume failed'));
+  resumeJob(job);
   res.json({ runState: getRunState(job.id) });
 });
 
@@ -205,12 +215,12 @@ app.delete('/api/jobs/:id/items', async (req, res) => {
 });
 
 async function recoverInterruptedJobs() {
-  const jobIds = await jobStore.recoverOrphanedItems();
+  const jobIds = await jobStore.findIncompleteJobs();
   for (const jobId of jobIds) {
     const job = await jobStore.loadJob(jobId);
     if (!job) continue;
-    logger.info({ jobId }, 'recovering job interrupted by a previous restart/crash');
-    resumeJob(job).catch((err) => logger.error({ jobId, err }, 'auto-recovery failed'));
+    logger.info({ jobId }, 'recovering incomplete job (interrupted or never started before restart)');
+    runJob(job); // enqueues in creation order — sequential, not all-at-once
   }
 }
 

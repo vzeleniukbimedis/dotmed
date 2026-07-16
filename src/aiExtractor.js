@@ -8,8 +8,10 @@ const MAX_MARKDOWN_CHARS = 12000;
 // Real model responses measured at 3-20s — this is a hang guard, not a
 // latency budget. Without it, a stalled (not erroring) provider request
 // blocks the single-concurrency worker forever, and now blocks every other
-// queued job behind it too.
-const REQUEST_TIMEOUT_MS = 30_000;
+// queued job behind it too. Overridable via env for fast tests.
+function getTimeoutMs() {
+  return Number(process.env.AI_REQUEST_TIMEOUT_MS) || 30_000;
+}
 
 function schemaFieldLines(schema) {
   return Object.entries(schema.properties)
@@ -29,8 +31,9 @@ function buildSystemPrompt(schema) {
 
 async function callModel(model, markdown) {
   const baseUrl = (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
+  const timeoutMs = getTimeoutMs();
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   let res;
   try {
@@ -53,7 +56,7 @@ async function callModel(model, markdown) {
     });
   } catch (err) {
     if (err.name === 'AbortError') {
-      throw new Error(`AI-провайдер не відповів за ${REQUEST_TIMEOUT_MS / 1000}с (модель "${model}")`);
+      throw new Error(`AI-провайдер не відповів за ${timeoutMs / 1000}с (модель "${model}")`);
     }
     throw err;
   } finally {

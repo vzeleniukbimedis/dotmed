@@ -1,3 +1,5 @@
+// Returns an array — each storefront link becomes its own job, and all
+// direct listing links submitted together share one job.
 export async function createJob(urls, types) {
   const res = await fetch('/api/jobs', {
     method: 'POST',
@@ -6,7 +8,7 @@ export async function createJob(urls, types) {
   });
   const body = await res.json();
   if (!res.ok) throw new Error(body.error || 'Request failed');
-  return body.jobId;
+  return body.jobIds;
 }
 
 export async function getJob(jobId, { offset, limit } = {}) {
