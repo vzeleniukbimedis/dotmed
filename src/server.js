@@ -21,7 +21,10 @@ app.use(session({
   cookie: {
     httpOnly: true,
     sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    // Separate from NODE_ENV on purpose: this app is often deployed behind a
+    // plain-HTTP LAN address (no public DNS -> no Let's Encrypt cert possible),
+    // where a hardcoded "secure in production" cookie would silently break login.
+    secure: process.env.COOKIE_SECURE === 'true',
     maxAge: 30 * 24 * 60 * 60 * 1000,
   },
   // Intentional: in-memory session store. Only 2 users — losing sessions on
