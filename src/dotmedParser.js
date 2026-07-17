@@ -9,7 +9,7 @@ const LISTING_SCHEMA = {
     price: { type: 'string', description: 'Asking price with currency exactly as shown, empty string if not listed' },
     year: { type: 'string', description: 'The equipment manufacture/model year (e.g. from a serial number or description like "2010 GE - BrightSpeed"), empty string if not found. Do NOT use the listing "Date:" field, which is just when the ad was posted, not the equipment year.' },
     warranty: { type: 'string', description: 'Warranty terms if mentioned anywhere on the page, empty string if not found' },
-    description: { type: 'string', description: 'Full free-text item description' },
+    description: { type: 'string', description: 'Full free-text item description. Strip generic DOTmed boilerplate/disclaimer/policy text that carries no item-specific information — e.g. "Seller assumes all responsibility for this listing.", any "Return Policy" section/heading and its boilerplate text (like "Items are sold as-is with no returns or refunds available unless explicitly stated."), and similar standard legal disclaimers repeated across listings. Keep only the actual item-specific description.' },
     isPart: { type: 'boolean', description: 'true if this listing is for a replacement part/accessory rather than a full equipment unit (look for a "Part Number" or "Part #" field)' },
     partNumber: { type: 'string', description: 'Part number, empty string if isPart is false or not found' },
     partsDescription: { type: 'string', description: 'The short parts description field shown next to Part Number, empty string if isPart is false' },
