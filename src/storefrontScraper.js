@@ -1,4 +1,5 @@
 const dotmedAuth = require('./dotmedAuth');
+const aiExtractor = require('./aiExtractor');
 const logger = require('./logger').child({ module: 'storefrontScraper' });
 
 const LISTINGS_PER_PAGE = 100;
@@ -38,23 +39,18 @@ function extractListingUrls(html) {
 }
 
 // Simplified mode: title + asking price straight from the seller's own
-// listing-row markup — no per-listing fetch, no AI call. Each row is:
-// <div id="listing_<id>_" ...> ... <h4><a href="/listing/...">Title</a></h4>
-// ... <span class="price">$X USD</span> ... </div>
-function extractStorefrontSummaries(html) {
-  const blocks = html.split(/(?=<div id="listing_\d+_")/).filter((b) => b.startsWith('<div id="listing_'));
-  const summaries = [];
-  for (const block of blocks) {
-    const titleMatch = block.match(/<h4>\s*<a[^>]*href="(\/listing\/[^"]+)"[^>]*>([^<]+)<\/a>\s*<\/h4>/);
-    if (!titleMatch) continue;
-    const priceMatch = block.match(/<span class="price">\s*([^<]+?)\s*<\/span>/);
-    summaries.push({
-      url: `https://www.dotmed.com${titleMatch[1]}`,
-      title: titleMatch[2].trim(),
-      price: priceMatch ? priceMatch[1].replace(/\s+/g, ' ').trim() : '',
-    });
-  }
-  return summaries;
+// listing-row markup — no per-listing fetch. Real-world storefront markup
+// varies in ways a hand-written regex can't reliably track, so this hands
+// the page HTML to the AI extraction chain instead of pattern-matching it.
+async function extractStorefrontSummaries(html, pageUrl) {
+  const items = await aiExtractor.extractStorefrontListings(html, pageUrl);
+  return items
+    .filter((item) => item?.url)
+    .map((item) => ({
+      url: item.url,
+      title: (item.title || '').trim(),
+      price: (item.price || '').trim(),
+    }));
 }
 
 async function fetchStorePage(sellerId, type, offset, cookies) {
@@ -100,20 +96,13 @@ async function paginateType(sellerId, type, cookies, extractFn) {
       }
     }
 
-    const extracted = extractFn(html);
+    const pageUrl = `https://www.dotmed.com/webstore/?user=${sellerId}&type=${type}&offset=${offset}`;
+    const extracted = await extractFn(html, pageUrl);
 
-    // TEMP DEBUG: track down why discoverListingSummaries reported 0 items
-    // for a seller confirmed to have equipment listings. Remove once fixed.
-    if (rowCount === 0) {
-      logger.error(
-        { sellerId, type, offset, htmlLen: html.length, snippet: html.slice(0, 1500) },
-        'TEMP: storefront page had zero listing rows after retries',
-      );
+    if (rowCount > 0 && extracted.length === 0) {
+      logger.error({ sellerId, type, offset, rowCount }, 'page had listing rows but extraction returned none');
     } else {
-      logger.info(
-        { sellerId, type, offset, rowCount, extractedCount: extracted.length },
-        'TEMP: storefront page extraction result',
-      );
+      logger.info({ sellerId, type, offset, rowCount, extractedCount: extracted.length }, 'storefront page extracted');
     }
 
     all.push(...extracted);

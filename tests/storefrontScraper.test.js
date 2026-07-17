@@ -1,7 +1,25 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const dotmedAuth = require('../src/dotmedAuth');
+const aiExtractor = require('../src/aiExtractor');
 const { discoverListings, discoverListingSummaries, extractSellerId } = require('../src/storefrontScraper');
+
+// discoverListingSummaries hands the raw page HTML to aiExtractor for
+// parsing (real storefront markup varies too much for a regex to track
+// reliably) — so these tests stub that call with a stand-in "reader" over
+// the same realListingRow() fixtures, rather than simulating an LLM API.
+function stubAiExtraction(html) {
+  const blocks = html.split(/(?=<div id="listing_\d+_")/).filter((b) => b.startsWith('<div id="listing_'));
+  return blocks.map((block) => {
+    const titleMatch = block.match(/<h4>\s*<a[^>]*href="(\/listing\/[^"]+)"[^>]*>([^<]+)<\/a>/);
+    const priceMatch = block.match(/<span class="price">\s*([^<]+?)\s*<\/span>/);
+    return {
+      url: `https://www.dotmed.com${titleMatch[1]}`,
+      title: titleMatch[2].trim(),
+      price: priceMatch ? priceMatch[1].replace(/\s+/g, ' ').trim() : '',
+    };
+  });
+}
 
 // Real markup from a live storefront listing row (dotmed.com), used to lock
 // in the title/price regex against actual structure rather than a synthetic
@@ -128,8 +146,10 @@ test('discoverListings paginates by row count, unaffected by each item linking i
 test('discoverListingSummaries extracts title and price from real storefront row markup', async (t) => {
   const originalEnsureSession = dotmedAuth.ensureSession;
   const originalFetch = global.fetch;
+  const originalExtract = aiExtractor.extractStorefrontListings;
 
   dotmedAuth.ensureSession = async () => ['session=fake'];
+  aiExtractor.extractStorefrontListings = async (html) => stubAiExtraction(html);
 
   global.fetch = async () => ({
     text: async () => [
@@ -141,6 +161,7 @@ test('discoverListingSummaries extracts title and price from real storefront row
   t.after(() => {
     dotmedAuth.ensureSession = originalEnsureSession;
     global.fetch = originalFetch;
+    aiExtractor.extractStorefrontListings = originalExtract;
   });
 
   const summaries = await discoverListingSummaries('https://www.dotmed.com/webstore/42358', ['equipment']);
@@ -156,8 +177,10 @@ test('discoverListingSummaries extracts title and price from real storefront row
 test('discoverListingSummaries paginates past a full 100-row page to the next', async (t) => {
   const originalEnsureSession = dotmedAuth.ensureSession;
   const originalFetch = global.fetch;
+  const originalExtract = aiExtractor.extractStorefrontListings;
 
   dotmedAuth.ensureSession = async () => ['session=fake'];
+  aiExtractor.extractStorefrontListings = async (html) => stubAiExtraction(html);
 
   global.fetch = async (url) => {
     const offset = Number(new URL(url).searchParams.get('offset'));
@@ -175,6 +198,7 @@ test('discoverListingSummaries paginates past a full 100-row page to the next', 
   t.after(() => {
     dotmedAuth.ensureSession = originalEnsureSession;
     global.fetch = originalFetch;
+    aiExtractor.extractStorefrontListings = originalExtract;
   });
 
   const summaries = await discoverListingSummaries('https://www.dotmed.com/webstore/999', ['equipment']);

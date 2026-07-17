@@ -95,7 +95,7 @@ function buildSystemPrompt(schema) {
   ].join('\n');
 }
 
-async function callModel(provider, model, markdown) {
+async function callModel(provider, model, input, { systemPrompt, maxTokens, maxInputChars } = {}) {
   const baseUrl = provider.baseUrl.replace(/\/+$/, '');
   const timeoutMs = getTimeoutMs();
   const controller = new AbortController();
@@ -112,11 +112,12 @@ async function callModel(provider, model, markdown) {
       body: JSON.stringify({
         model,
         messages: [
-          { role: 'system', content: buildSystemPrompt(LISTING_SCHEMA) },
-          { role: 'user', content: markdown.slice(0, MAX_MARKDOWN_CHARS) },
+          { role: 'system', content: systemPrompt || buildSystemPrompt(LISTING_SCHEMA) },
+          { role: 'user', content: input.slice(0, maxInputChars || MAX_MARKDOWN_CHARS) },
         ],
         response_format: { type: 'json_object' },
         temperature: 0,
+        ...(maxTokens ? { max_tokens: maxTokens } : {}),
       }),
       signal: controller.signal,
     });
@@ -195,4 +196,67 @@ async function extractListingData(markdown, url) {
   throw lastError;
 }
 
-module.exports = { extractListingData, buildSystemPrompt, getRateLimitInfo, getProviders };
+// Storefront pages list many items on one page — a regex over the raw HTML
+// is brittle (dotmed's markup for this varies in ways we don't fully know),
+// so this hands the (cleaned, trimmed) page HTML to the same model chain and
+// asks it to read off every listing's url/title/price directly, the way a
+// person skimming the page would.
+const STOREFRONT_MAX_HTML_CHARS = 60_000;
+const STOREFRONT_MAX_TOKENS = 6_000;
+
+function cleanStorefrontHtml(html) {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<head[\s\S]*?<\/head>/gi, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/[ \t]{2,}/g, ' ');
+}
+
+function buildStorefrontSystemPrompt() {
+  return [
+    'You read a DOTmed.com seller storefront page (raw HTML) listing multiple medical equipment/parts items for sale.',
+    'Each item appears in a block similar to this real example:',
+    '<div id="listing_5582241_" ...><h4><a href="/listing/podiatric-x-ray/curvebeam/ped-cat/5582241">CurveBeam Ped CAT Podiatric X-Ray For Sale</a></h4> ... <span class="price">$15,950 USD</span> ... </div>',
+    'For EVERY item block found anywhere on the page, extract:',
+    '- "url": the href starting with /listing/, made absolute as "https://www.dotmed.com" + href',
+    '- "title": the link text inside the <h4>',
+    '- "price": the text inside the price element exactly as shown, "" if genuinely absent',
+    'Do not skip any item, and do not invent items that are not on the page.',
+    'Respond with ONLY a JSON object: {"items": [{"url": "...", "title": "...", "price": "..."}, ...]}',
+  ].join('\n');
+}
+
+async function extractStorefrontListings(html, pageUrl) {
+  const providers = getProviders();
+  if (providers.length === 0) {
+    throw new Error('Не налаштовано жодного AI-провайдера (OPENAI_BASE_URL/OPENAI_API_KEY/MODEL_NAME)');
+  }
+
+  const cleaned = cleanStorefrontHtml(html);
+  const systemPrompt = buildStorefrontSystemPrompt();
+
+  let lastError;
+  for (const provider of providers) {
+    for (const model of provider.models) {
+      try {
+        const result = await callModel(provider, model, cleaned, {
+          systemPrompt,
+          maxTokens: STOREFRONT_MAX_TOKENS,
+          maxInputChars: STOREFRONT_MAX_HTML_CHARS,
+        });
+        const items = Array.isArray(result?.items) ? result.items : [];
+        if (items.length > 0) return items;
+        logger.error({ pageUrl, provider: provider.name, model }, 'storefront page extraction returned no items');
+      } catch (err) {
+        lastError = err;
+        logger.error({ pageUrl, provider: provider.name, model, err }, 'storefront listing extraction attempt failed');
+      }
+    }
+  }
+
+  if (lastError) throw lastError;
+  return [];
+}
+
+module.exports = { extractListingData, extractStorefrontListings, buildSystemPrompt, getRateLimitInfo, getProviders };

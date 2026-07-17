@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { extractListingData } = require('../src/aiExtractor');
+const { extractListingData, extractStorefrontListings } = require('../src/aiExtractor');
 
 // Constant across every test below — only MODEL_NAME/MODEL_NAME_FALLBACK
 // (and the AI_PROVIDER2_* set, where used) vary per test.
@@ -223,4 +223,58 @@ test('extractListingData returns the primary all-empty result when there is no f
 
   const result = await extractListingData('# markdown', 'https://example.com/1');
   assert.equal(result.title, '');
+});
+
+test('extractStorefrontListings parses the items array from the model response', async (t) => {
+  const originalFetch = global.fetch;
+  process.env.MODEL_NAME = 'test-model';
+  delete process.env.MODEL_NAME_FALLBACK;
+
+  global.fetch = async () => mockChatResponse(200, {
+    choices: [{
+      message: {
+        content: JSON.stringify({
+          items: [
+            { url: 'https://www.dotmed.com/listing/x/y/1', title: 'Item One', price: '$100 USD' },
+            { url: 'https://www.dotmed.com/listing/x/y/2', title: 'Item Two', price: '$200 USD' },
+          ],
+        }),
+      },
+    }],
+  });
+
+  t.after(() => { global.fetch = originalFetch; });
+
+  const items = await extractStorefrontListings('<div id="listing_1_">...</div>', 'https://www.dotmed.com/webstore/1');
+  assert.equal(items.length, 2);
+  assert.equal(items[0].title, 'Item One');
+});
+
+test('extractStorefrontListings moves to the next provider when the first returns no items', async (t) => {
+  const originalFetch = global.fetch;
+  process.env.MODEL_NAME = 'p1-model';
+  delete process.env.MODEL_NAME_FALLBACK;
+  process.env.AI_PROVIDER2_BASE_URL = 'https://provider2.test/v1';
+  process.env.AI_PROVIDER2_API_KEY = 'p2-key';
+  process.env.AI_PROVIDER2_MODEL = 'p2-model';
+
+  global.fetch = async (url) => {
+    if (url.startsWith('https://example-provider.test')) {
+      return mockChatResponse(200, { choices: [{ message: { content: JSON.stringify({ items: [] }) } }] });
+    }
+    return mockChatResponse(200, {
+      choices: [{ message: { content: JSON.stringify({ items: [{ url: 'https://www.dotmed.com/listing/x/y/9', title: 'From P2', price: '' }] }) } }],
+    });
+  };
+
+  t.after(() => {
+    global.fetch = originalFetch;
+    delete process.env.AI_PROVIDER2_BASE_URL;
+    delete process.env.AI_PROVIDER2_API_KEY;
+    delete process.env.AI_PROVIDER2_MODEL;
+  });
+
+  const items = await extractStorefrontListings('<div id="listing_9_">...</div>', 'https://www.dotmed.com/webstore/1');
+  assert.equal(items.length, 1);
+  assert.equal(items[0].title, 'From P2');
 });
