@@ -1,4 +1,5 @@
 const dotmedAuth = require('./dotmedAuth');
+const logger = require('./logger').child({ module: 'storefrontScraper' });
 
 const LISTINGS_PER_PAGE = 100;
 const TYPE_LABELS = { equipment: 'Обладнання', parts: 'Запчастини' };
@@ -99,7 +100,23 @@ async function paginateType(sellerId, type, cookies, extractFn) {
       }
     }
 
-    all.push(...extractFn(html));
+    const extracted = extractFn(html);
+
+    // TEMP DEBUG: track down why discoverListingSummaries reported 0 items
+    // for a seller confirmed to have equipment listings. Remove once fixed.
+    if (rowCount === 0) {
+      logger.error(
+        { sellerId, type, offset, htmlLen: html.length, snippet: html.slice(0, 1500) },
+        'TEMP: storefront page had zero listing rows after retries',
+      );
+    } else {
+      logger.info(
+        { sellerId, type, offset, rowCount, extractedCount: extracted.length },
+        'TEMP: storefront page extraction result',
+      );
+    }
+
+    all.push(...extracted);
 
     if (rowCount < LISTINGS_PER_PAGE) break;
     offset += LISTINGS_PER_PAGE;
