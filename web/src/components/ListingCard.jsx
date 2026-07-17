@@ -1,4 +1,5 @@
-import { PackageSearch, TriangleAlert, Trash2, Square } from 'lucide-react';
+import { useState } from 'react';
+import { PackageSearch, TriangleAlert, Trash2, Square, ImageOff } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 const FIELD_LABELS = [
@@ -17,6 +18,24 @@ function elapsedLabel(startedAt) {
   if (!startedAt) return null;
   const s = Math.round((Date.now() - new Date(startedAt).getTime()) / 1000);
   return `${s}с`;
+}
+
+// Some networks/browsers block hotlinked images based on the Referer header
+// we'd otherwise send — no-referrer sidesteps that. If it still fails (blocked
+// outright, or the image genuinely 404s), fall back to a direct-open link
+// instead of silently leaving a blank gap.
+function Photo({ src }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <a className="photo-fallback" href={src} target="_blank" rel="noreferrer" title="Фото не завантажилось у прев'ю — відкрити напряму">
+        <ImageOff size={16} />
+      </a>
+    );
+  }
+  return (
+    <img src={src} loading="lazy" alt="" referrerPolicy="no-referrer" onError={() => setFailed(true)} />
+  );
 }
 
 function DeleteButton({ onClick }) {
@@ -106,7 +125,7 @@ export default function ListingCard({ item, onDelete }) {
           <div className="reticle-frame">
             <div className="photos">
               {d.photos.map((src) => (
-                <img key={src} src={src} loading="lazy" alt="" />
+                <Photo key={src} src={src} />
               ))}
             </div>
           </div>
