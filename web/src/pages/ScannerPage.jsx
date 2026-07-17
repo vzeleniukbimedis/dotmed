@@ -93,12 +93,19 @@ export default function ScannerPage({
       {error && <p className="error-text">Помилка: {error}</p>}
       {submitInfo && <p className="info-text">{submitInfo}</p>}
 
-      {counts && <StatsBar counts={counts} />}
-      {job && counts && <ProgressBar counts={counts} createdAt={job.createdAt} />}
-      <JobControls job={job} onPause={onPause} onUnpause={onUnpause} onStop={onStop} onResumeStopped={onResumeStopped} />
-      {job && <ExportButtons jobId={job.id} successCount={counts?.success ?? 0} />}
+      {job?.discoveryStatus !== 'pending' && counts && <StatsBar counts={counts} />}
+      {job?.discoveryStatus !== 'pending' && job && counts && <ProgressBar counts={counts} createdAt={job.createdAt} />}
+      {job?.discoveryStatus !== 'pending' && (
+        <JobControls job={job} onPause={onPause} onUnpause={onUnpause} onStop={onStop} onResumeStopped={onResumeStopped} />
+      )}
+      {job?.discoveryStatus !== 'pending' && job && <ExportButtons jobId={job.id} successCount={counts?.success ?? 0} />}
 
-      {jobLoading ? (
+      {job?.discoveryStatus === 'pending' ? (
+        <div className="empty-state">
+          <Loader2 size={28} strokeWidth={1.5} className="spin" />
+          <p>Шукаємо оголошення в продавця… Для великих магазинів це може зайняти кілька хвилин.</p>
+        </div>
+      ) : jobLoading ? (
         <div className="empty-state">
           <Loader2 size={28} strokeWidth={1.5} className="spin" />
           <p>Завантажуємо задачу…</p>

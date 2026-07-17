@@ -70,7 +70,7 @@ export default function App() {
   // page — stops itself once nothing in the list is still in flight.
   useEffect(() => {
     clearInterval(historyPollRef.current);
-    const hasActiveJobs = history.some((j) => ['queued', 'running', 'paused'].includes(j.runState));
+    const hasActiveJobs = history.some((j) => j.discoveryStatus === 'pending' || ['queued', 'running', 'paused'].includes(j.runState));
     if (activePage === 'history' && hasActiveJobs) {
       historyPollRef.current = setInterval(() => {
         listJobs().then(setHistory).catch(() => {});
@@ -81,6 +81,7 @@ export default function App() {
 
   function isRunning(j) {
     if (!j) return false;
+    if (j.discoveryStatus === 'pending') return true;
     if (j.counts) return j.counts.pending > 0 || j.counts.running > 0;
     return j.items.some((i) => i.status === 'pending' || i.status === 'running');
   }

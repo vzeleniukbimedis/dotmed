@@ -127,6 +127,17 @@ async function expandStorefront(url, types, mode) {
   }
 }
 
+// Discovering a storefront's listings (paginating + AI-reading each page) can
+// take minutes for a large seller — run it after the job is created rather
+// than awaiting it inline, so a slow scan never blocks the HTTP response
+// long enough to hit the reverse proxy's own request timeout (which surfaces
+// to the client as an HTML error page failing to parse as JSON).
+async function runStorefrontDiscovery(jobId, storefrontUrl, types, mode) {
+  const entries = await expandStorefront(storefrontUrl, types, mode);
+  const job = await jobStore.completeDiscovery(jobId, entries);
+  runJob(job);
+}
+
 // Each storefront becomes its own job (independent progress/pause/export);
 // direct listing links submitted together share one job. Jobs run one at a
 // time (see jobRunner's queue) rather than in parallel, so submitting
@@ -151,9 +162,11 @@ app.post('/api/jobs', async (req, res) => {
   try {
     jobIds = [];
     for (const storefrontUrl of storefrontUrls) {
-      const entries = await expandStorefront(storefrontUrl, types, mode);
-      const job = await jobStore.createJob(entries, req.session.user.email);
-      runJob(job);
+      const job = await jobStore.createJob([], req.session.user.email, {
+        discoveryStatus: 'pending', discoveryUrl: storefrontUrl, discoveryTypes: types, discoveryMode: mode,
+      });
+      runStorefrontDiscovery(job.id, storefrontUrl, types, mode)
+        .catch((err) => logger.error({ jobId: job.id, err }, 'storefront discovery failed'));
       jobIds.push(job.id);
     }
     if (directUrls.length > 0) {
@@ -253,6 +266,13 @@ async function recoverInterruptedJobs() {
     if (!job) continue;
     logger.info({ jobId }, 'recovering incomplete job (interrupted or never started before restart)');
     runJob(job); // enqueues in creation order — sequential, not all-at-once
+  }
+
+  const stuckDiscoveries = await jobStore.findStuckDiscoveries();
+  for (const { id, url, types, mode } of stuckDiscoveries) {
+    logger.info({ jobId: id, url }, 'resuming storefront discovery interrupted by restart');
+    runStorefrontDiscovery(id, url, types, mode)
+      .catch((err) => logger.error({ jobId: id, err }, 'storefront discovery failed'));
   }
 }
 

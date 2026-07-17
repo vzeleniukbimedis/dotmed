@@ -87,6 +87,42 @@ test('deleteJob removes the job and cascades to its items', async () => {
   assert.equal(loaded, null);
 });
 
+test('createJob with discoveryStatus "pending" starts with 0 items until completeDiscovery fills them in', async () => {
+  const job = await jobStore.createJob([], OWNER_A, {
+    discoveryStatus: 'pending', discoveryUrl: 'https://www.dotmed.com/webstore/1', discoveryTypes: ['equipment'], discoveryMode: 'simplified',
+  });
+  assert.equal(job.items.length, 0);
+  assert.equal(job.discoveryStatus, 'pending');
+
+  const loaded = await jobStore.loadJob(job.id);
+  assert.equal(loaded.discoveryStatus, 'pending');
+  assert.equal(loaded.counts.total, 0);
+
+  const completed = await jobStore.completeDiscovery(job.id, [{ url: 'https://www.dotmed.com/listing/a/1', data: { title: 'x', price: '$1' } }]);
+  assert.equal(completed.discoveryStatus, 'done');
+  assert.equal(completed.items.length, 1);
+
+  const loadedAfter = await jobStore.loadJob(job.id);
+  assert.equal(loadedAfter.discoveryStatus, 'done');
+  assert.equal(loadedAfter.counts.total, 1);
+});
+
+test('findStuckDiscoveries returns only jobs still pending discovery, with their original params', async () => {
+  const stuck = await jobStore.createJob([], OWNER_A, {
+    discoveryStatus: 'pending', discoveryUrl: 'https://www.dotmed.com/webstore/2', discoveryTypes: ['equipment', 'parts'], discoveryMode: 'full',
+  });
+  const done = await jobStore.createJob(['https://www.dotmed.com/listing/a/1'], OWNER_A);
+
+  const found = await jobStore.findStuckDiscoveries();
+  assert.ok(found.some((d) => d.id === stuck.id));
+  assert.ok(!found.some((d) => d.id === done.id));
+
+  const match = found.find((d) => d.id === stuck.id);
+  assert.equal(match.url, 'https://www.dotmed.com/webstore/2');
+  assert.deepEqual(match.types, ['equipment', 'parts']);
+  assert.equal(match.mode, 'full');
+});
+
 test.after(async () => {
   await db.query('DELETE FROM jobs WHERE owner_email IN ($1, $2)', [OWNER_A, OWNER_B]);
   await db.pool.end();

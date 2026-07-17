@@ -12,15 +12,10 @@ function toItem(row) {
   return item;
 }
 
-async function createJob(entries, ownerEmail) {
-  const id = crypto.randomUUID();
-  const createdAt = new Date();
-
-  await db.query('INSERT INTO jobs (id, owner_email, created_at) VALUES ($1, $2, $3)', [id, ownerEmail, createdAt]);
-
+async function insertItems(jobId, entries, startPosition = 0) {
   const items = [];
-  for (let position = 0; position < entries.length; position++) {
-    const entry = entries[position];
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
     // `data` lets a caller pre-fill an already-known result (e.g. the
     // simplified storefront scan, which reads title/price straight off the
     // seller's page) so the item never gets queued for a per-item scrape.
@@ -31,15 +26,39 @@ async function createJob(entries, ownerEmail) {
     await db.query(
       `INSERT INTO job_items (id, job_id, position, url, status, error, data)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [itemId, id, position, url, status, error || null, data ? JSON.stringify(data) : null],
+      [itemId, jobId, startPosition + i, url, status, error || null, data ? JSON.stringify(data) : null],
     );
 
     const item = error ? { url, status: 'error', error } : data ? { url, status: 'success', data } : { url, status: 'pending' };
     Object.defineProperty(item, '__id', { value: itemId, enumerable: false });
     items.push(item);
   }
+  return items;
+}
 
-  return { id, ownerEmail, createdAt: createdAt.toISOString(), items };
+async function createJob(entries, ownerEmail, { discoveryStatus = 'done', discoveryUrl, discoveryTypes, discoveryMode } = {}) {
+  const id = crypto.randomUUID();
+  const createdAt = new Date();
+
+  await db.query(
+    `INSERT INTO jobs (id, owner_email, created_at, discovery_status, discovery_url, discovery_types, discovery_mode)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [id, ownerEmail, createdAt, discoveryStatus, discoveryUrl || null, discoveryTypes ? JSON.stringify(discoveryTypes) : null, discoveryMode || null],
+  );
+  const items = await insertItems(id, entries);
+
+  return { id, ownerEmail, createdAt: createdAt.toISOString(), items, discoveryStatus };
+}
+
+// Storefront discovery (finding what's on a seller's page) can take minutes
+// for large sellers — createJob(entries, owner, { discoveryStatus: 'pending' })
+// creates the job with 0 items so the HTTP response returns immediately, and
+// this fills in the real items once discovery finishes in the background.
+async function completeDiscovery(jobId, entries) {
+  const items = await insertItems(jobId, entries);
+  await db.query(`UPDATE jobs SET discovery_status = 'done' WHERE id = $1`, [jobId]);
+  const { rows } = await db.query('SELECT owner_email, created_at FROM jobs WHERE id = $1', [jobId]);
+  return { id: jobId, ownerEmail: rows[0].owner_email, createdAt: rows[0].created_at.toISOString(), items, discoveryStatus: 'done' };
 }
 
 async function saveJob(job) {
@@ -64,7 +83,7 @@ async function saveJob(job) {
 // counts via a SQL aggregate (cheap) rather than the full row set, and let
 // callers optionally page the items themselves via { offset, limit }.
 async function loadJob(id, { offset = 0, limit } = {}) {
-  const jobRes = await db.query('SELECT id, owner_email, created_at FROM jobs WHERE id = $1', [id]);
+  const jobRes = await db.query('SELECT id, owner_email, created_at, discovery_status FROM jobs WHERE id = $1', [id]);
   if (jobRes.rows.length === 0) return null;
 
   const countsRes = await db.query(
@@ -92,6 +111,7 @@ async function loadJob(id, { offset = 0, limit } = {}) {
     id: jobRes.rows[0].id,
     ownerEmail: jobRes.rows[0].owner_email,
     createdAt: jobRes.rows[0].created_at.toISOString(),
+    discoveryStatus: jobRes.rows[0].discovery_status,
     items: itemsRes.rows.map(toItem),
     counts,
   };
@@ -140,9 +160,26 @@ async function findIncompleteJobs() {
   return rows.map((r) => r.id);
 }
 
+// A server restart mid-discovery leaves a job stuck at 0 items forever
+// (findIncompleteJobs only looks at job_items, and a discovering job has
+// none yet) — this finds those so discovery can be resumed with the same
+// url/types/mode it was originally started with.
+async function findStuckDiscoveries() {
+  const { rows } = await db.query(
+    `SELECT id, discovery_url, discovery_types, discovery_mode FROM jobs
+     WHERE discovery_status = 'pending' ORDER BY created_at ASC`,
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    url: r.discovery_url,
+    types: r.discovery_types ? JSON.parse(r.discovery_types) : ['equipment', 'parts'],
+    mode: r.discovery_mode || 'full',
+  }));
+}
+
 async function listJobs(ownerEmail) {
   const { rows } = await db.query(
-    `SELECT j.id, j.created_at,
+    `SELECT j.id, j.created_at, j.discovery_status,
             COUNT(ji.id)::int AS total,
             COUNT(ji.id) FILTER (WHERE ji.status = 'success')::int AS success,
             COUNT(ji.id) FILTER (WHERE ji.status = 'error')::int AS error
@@ -156,6 +193,7 @@ async function listJobs(ownerEmail) {
   return rows.map((r) => ({
     id: r.id,
     createdAt: r.created_at.toISOString(),
+    discoveryStatus: r.discovery_status,
     total: r.total,
     success: r.success,
     error: r.error,
@@ -163,5 +201,6 @@ async function listJobs(ownerEmail) {
 }
 
 module.exports = {
-  createJob, saveJob, loadJob, listJobs, deleteItem, deleteJob, findIncompleteJobs, getJobOwner, markPendingAsStopped,
+  createJob, completeDiscovery, findStuckDiscoveries, saveJob, loadJob, listJobs, deleteItem, deleteJob,
+  findIncompleteJobs, getJobOwner, markPendingAsStopped,
 };

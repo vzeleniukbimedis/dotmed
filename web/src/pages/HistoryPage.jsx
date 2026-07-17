@@ -7,6 +7,7 @@ function formatDate(iso) {
 }
 
 function runStateLabel(job) {
+  if (job.discoveryStatus === 'pending') return 'Шукаємо оголошення…';
   if (job.runState === 'queued') return `У черзі${job.queuePosition ? ` (${job.queuePosition}-та)` : ''}`;
   if (job.runState === 'running') return 'Виконується';
   if (job.runState === 'paused') return 'На паузі';
