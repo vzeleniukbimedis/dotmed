@@ -1,4 +1,5 @@
 const dotmedAuth = require('./dotmedAuth');
+const logger = require('./logger').child({ module: 'storefrontScraper' });
 
 const LISTINGS_PER_PAGE = 100;
 const TYPE_LABELS = { equipment: 'Обладнання', parts: 'Запчастини' };
@@ -52,6 +53,19 @@ async function fetchTypeListings(sellerId, type, cookies) {
       html = await fetchStorePage(sellerId, type, offset, cookies);
       if (isBlockedOrLoggedOut(html)) {
         throw new Error(`Сесія DOTmed недійсна навіть після повторного логіну (тип: ${TYPE_LABELS[type] || type})`);
+      }
+    }
+
+    // TEMP DEBUG: capture the raw markup around the first listing on the
+    // first page so we can design a price-extraction regex from real
+    // structure instead of guessing. Remove once that's implemented.
+    if (offset === 0) {
+      const linkIdx = html.indexOf('/listing/');
+      if (linkIdx !== -1) {
+        logger.info(
+          { sellerId, type, snippet: html.slice(Math.max(0, linkIdx - 500), linkIdx + 1500) },
+          'TEMP: storefront page markup sample',
+        );
       }
     }
 
