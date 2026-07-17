@@ -15,7 +15,7 @@ export default function ExportButtons({ jobId, successCount }) {
     setExporting(true);
     try {
       const full = await getJob(jobId);
-      downloadFn(full.items);
+      downloadFn(full.items, full.mode);
     } finally {
       setExporting(false);
     }

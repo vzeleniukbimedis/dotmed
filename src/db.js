@@ -44,6 +44,11 @@ const MIGRATIONS = `
   ALTER TABLE jobs ADD COLUMN IF NOT EXISTS discovery_url TEXT;
   ALTER TABLE jobs ADD COLUMN IF NOT EXISTS discovery_types TEXT;
   ALTER TABLE jobs ADD COLUMN IF NOT EXISTS discovery_mode TEXT;
+
+  -- 'simplified' vs 'full' — lets export pick columns appropriate to what
+  -- was actually scanned (simplified items only ever have url+price; the
+  -- full per-item field set would just be a wall of empty columns).
+  ALTER TABLE jobs ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'full';
 `;
 
 let migrated = null;

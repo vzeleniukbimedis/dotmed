@@ -19,6 +19,15 @@ const XLSX_COLUMNS = [
   ['photos', 'Фото'],
 ];
 
+// Simplified-mode items only ever have url+price populated (see
+// server.js's expandStorefront) — exporting the full column set would just
+// be a wall of empty cells, so this mode gets its own minimal shape.
+const SIMPLIFIED_CSV_COLUMNS = ['url', 'price'];
+const SIMPLIFIED_XLSX_COLUMNS = [
+  ['url', 'Лінк'],
+  ['price', 'Ціна'],
+];
+
 function download(filename, content, mime) {
   const blob = new Blob([content], { type: mime });
   const link = document.createElement('a');
@@ -28,11 +37,11 @@ function download(filename, content, mime) {
   URL.revokeObjectURL(link.href);
 }
 
-function toCsv(successItems) {
+function toCsv(successItems, columns) {
   const escape = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const rows = [CSV_COLUMNS.join(',')];
+  const rows = [columns.join(',')];
   successItems.forEach(({ url, data }) => {
-    rows.push(CSV_COLUMNS.map((c) => {
+    rows.push(columns.map((c) => {
       if (c === 'url') return escape(url);
       if (c === 'photos') return escape((data.photos || []).join(' | '));
       return escape(data[c]);
@@ -42,21 +51,26 @@ function toCsv(successItems) {
   return `﻿${rows.join('\n')}`;
 }
 
-export function downloadJson(items) {
+export function downloadJson(items, mode) {
   const successItems = items.filter((i) => i.status === 'success');
-  download('dotmed-listings.json', JSON.stringify(successItems.map((i) => ({ url: i.url, ...i.data })), null, 2), 'application/json');
+  const rows = mode === 'simplified'
+    ? successItems.map((i) => ({ url: i.url, price: i.data.price }))
+    : successItems.map((i) => ({ url: i.url, ...i.data }));
+  download('dotmed-listings.json', JSON.stringify(rows, null, 2), 'application/json');
 }
 
-export function downloadCsv(items) {
+export function downloadCsv(items, mode) {
   const successItems = items.filter((i) => i.status === 'success');
-  download('dotmed-listings.csv', toCsv(successItems), 'text/csv;charset=utf-8');
+  const columns = mode === 'simplified' ? SIMPLIFIED_CSV_COLUMNS : CSV_COLUMNS;
+  download('dotmed-listings.csv', toCsv(successItems, columns), 'text/csv;charset=utf-8');
 }
 
-export function downloadXlsx(items) {
+export function downloadXlsx(items, mode) {
   const successItems = items.filter((i) => i.status === 'success');
+  const columns = mode === 'simplified' ? SIMPLIFIED_XLSX_COLUMNS : XLSX_COLUMNS;
   const rows = successItems.map(({ url, data }) => {
     const row = {};
-    XLSX_COLUMNS.forEach(([key, label]) => {
+    columns.forEach(([key, label]) => {
       if (key === 'url') row[label] = url;
       else if (key === 'photos') row[label] = (data.photos || []).join(' | ');
       else if (key === 'isPart') row[label] = data.isPart ? 'Так' : 'Ні';
@@ -65,8 +79,8 @@ export function downloadXlsx(items) {
     return row;
   });
 
-  const sheet = XLSX.utils.json_to_sheet(rows, { header: XLSX_COLUMNS.map(([, label]) => label) });
-  sheet['!cols'] = XLSX_COLUMNS.map(([key]) => ({ wch: key === 'description' ? 60 : key === 'photos' ? 40 : 18 }));
+  const sheet = XLSX.utils.json_to_sheet(rows, { header: columns.map(([, label]) => label) });
+  sheet['!cols'] = columns.map(([key]) => ({ wch: key === 'description' ? 60 : key === 'photos' ? 40 : 18 }));
 
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, sheet, 'Оголошення');

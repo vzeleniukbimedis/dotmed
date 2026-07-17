@@ -163,7 +163,7 @@ app.post('/api/jobs', async (req, res) => {
     jobIds = [];
     for (const storefrontUrl of storefrontUrls) {
       const job = await jobStore.createJob([], req.session.user.email, {
-        discoveryStatus: 'pending', discoveryUrl: storefrontUrl, discoveryTypes: types, discoveryMode: mode,
+        discoveryStatus: 'pending', discoveryUrl: storefrontUrl, discoveryTypes: types, discoveryMode: mode, mode,
       });
       runStorefrontDiscovery(job.id, storefrontUrl, types, mode)
         .catch((err) => logger.error({ jobId: job.id, err }, 'storefront discovery failed'));

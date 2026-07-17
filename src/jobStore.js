@@ -36,18 +36,18 @@ async function insertItems(jobId, entries, startPosition = 0) {
   return items;
 }
 
-async function createJob(entries, ownerEmail, { discoveryStatus = 'done', discoveryUrl, discoveryTypes, discoveryMode } = {}) {
+async function createJob(entries, ownerEmail, { discoveryStatus = 'done', discoveryUrl, discoveryTypes, discoveryMode, mode = 'full' } = {}) {
   const id = crypto.randomUUID();
   const createdAt = new Date();
 
   await db.query(
-    `INSERT INTO jobs (id, owner_email, created_at, discovery_status, discovery_url, discovery_types, discovery_mode)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [id, ownerEmail, createdAt, discoveryStatus, discoveryUrl || null, discoveryTypes ? JSON.stringify(discoveryTypes) : null, discoveryMode || null],
+    `INSERT INTO jobs (id, owner_email, created_at, discovery_status, discovery_url, discovery_types, discovery_mode, mode)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [id, ownerEmail, createdAt, discoveryStatus, discoveryUrl || null, discoveryTypes ? JSON.stringify(discoveryTypes) : null, discoveryMode || null, mode],
   );
   const items = await insertItems(id, entries);
 
-  return { id, ownerEmail, createdAt: createdAt.toISOString(), items, discoveryStatus };
+  return { id, ownerEmail, createdAt: createdAt.toISOString(), items, discoveryStatus, mode };
 }
 
 // Storefront discovery (finding what's on a seller's page) can take minutes
@@ -57,8 +57,8 @@ async function createJob(entries, ownerEmail, { discoveryStatus = 'done', discov
 async function completeDiscovery(jobId, entries) {
   const items = await insertItems(jobId, entries);
   await db.query(`UPDATE jobs SET discovery_status = 'done' WHERE id = $1`, [jobId]);
-  const { rows } = await db.query('SELECT owner_email, created_at FROM jobs WHERE id = $1', [jobId]);
-  return { id: jobId, ownerEmail: rows[0].owner_email, createdAt: rows[0].created_at.toISOString(), items, discoveryStatus: 'done' };
+  const { rows } = await db.query('SELECT owner_email, created_at, mode FROM jobs WHERE id = $1', [jobId]);
+  return { id: jobId, ownerEmail: rows[0].owner_email, createdAt: rows[0].created_at.toISOString(), items, discoveryStatus: 'done', mode: rows[0].mode };
 }
 
 async function saveJob(job) {
@@ -83,7 +83,7 @@ async function saveJob(job) {
 // counts via a SQL aggregate (cheap) rather than the full row set, and let
 // callers optionally page the items themselves via { offset, limit }.
 async function loadJob(id, { offset = 0, limit } = {}) {
-  const jobRes = await db.query('SELECT id, owner_email, created_at, discovery_status FROM jobs WHERE id = $1', [id]);
+  const jobRes = await db.query('SELECT id, owner_email, created_at, discovery_status, mode FROM jobs WHERE id = $1', [id]);
   if (jobRes.rows.length === 0) return null;
 
   const countsRes = await db.query(
@@ -112,6 +112,7 @@ async function loadJob(id, { offset = 0, limit } = {}) {
     ownerEmail: jobRes.rows[0].owner_email,
     createdAt: jobRes.rows[0].created_at.toISOString(),
     discoveryStatus: jobRes.rows[0].discovery_status,
+    mode: jobRes.rows[0].mode,
     items: itemsRes.rows.map(toItem),
     counts,
   };

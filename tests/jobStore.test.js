@@ -107,6 +107,19 @@ test('createJob with discoveryStatus "pending" starts with 0 items until complet
   assert.equal(loadedAfter.counts.total, 1);
 });
 
+test('createJob persists mode, and completeDiscovery/loadJob both reflect it', async () => {
+  const job = await jobStore.createJob([], OWNER_A, {
+    discoveryStatus: 'pending', discoveryUrl: 'https://www.dotmed.com/webstore/3', discoveryTypes: ['equipment'], discoveryMode: 'simplified', mode: 'simplified',
+  });
+  assert.equal(job.mode, 'simplified');
+
+  const completed = await jobStore.completeDiscovery(job.id, [{ url: 'https://www.dotmed.com/listing/a/1', data: { title: 'x', price: '$1' } }]);
+  assert.equal(completed.mode, 'simplified');
+
+  const loaded = await jobStore.loadJob(job.id);
+  assert.equal(loaded.mode, 'simplified');
+});
+
 test('findStuckDiscoveries returns only jobs still pending discovery, with their original params', async () => {
   const stuck = await jobStore.createJob([], OWNER_A, {
     discoveryStatus: 'pending', discoveryUrl: 'https://www.dotmed.com/webstore/2', discoveryTypes: ['equipment', 'parts'], discoveryMode: 'full',

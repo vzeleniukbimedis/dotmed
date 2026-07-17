@@ -469,14 +469,72 @@ textarea:focus, button:focus-visible, a:focus-visible {
 .type-checkbox {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   font-size: 13px;
   color: var(--text);
   cursor: pointer;
 }
 
-.type-checkbox input {
+/* Native checkboxes/radios render as raw OS chrome, clashing hard with the
+   custom pill buttons and mono labels everywhere else — draw them by hand
+   instead, in the same monochrome fill/border language as the buttons. */
+.type-checkbox input[type="checkbox"],
+.type-checkbox input[type="radio"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex-shrink: 0;
+  border: 1.5px solid var(--border);
+  background: var(--bg);
   cursor: pointer;
+  position: relative;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.type-checkbox input[type="checkbox"] { border-radius: 4px; }
+.type-checkbox input[type="radio"] { border-radius: 50%; }
+
+.type-checkbox:hover input[type="checkbox"],
+.type-checkbox:hover input[type="radio"] {
+  border-color: var(--text);
+}
+
+.type-checkbox input[type="checkbox"]:checked,
+.type-checkbox input[type="radio"]:checked {
+  background: var(--text);
+  border-color: var(--text);
+}
+
+.type-checkbox input[type="checkbox"]:checked::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--bg);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.type-checkbox input[type="radio"]:checked::after {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: var(--bg);
+}
+
+.type-checkbox input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.type-checkbox input:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
 }
 
 .mode-toggle {
