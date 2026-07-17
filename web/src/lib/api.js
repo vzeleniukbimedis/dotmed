@@ -1,10 +1,12 @@
 // Returns an array — each storefront link becomes its own job, and all
-// direct listing links submitted together share one job.
-export async function createJob(urls, types) {
+// direct listing links submitted together share one job. mode 'simplified'
+// only affects storefront links: title+price straight off the seller's
+// page, no per-item AI scrape.
+export async function createJob(urls, types, mode = 'full') {
   const res = await fetch('/api/jobs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ urls, types }),
+    body: JSON.stringify({ urls, types, mode }),
   });
   const body = await res.json();
   if (!res.ok) throw new Error(body.error || 'Request failed');

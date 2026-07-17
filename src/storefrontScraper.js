@@ -1,5 +1,4 @@
 const dotmedAuth = require('./dotmedAuth');
-const logger = require('./logger').child({ module: 'storefrontScraper' });
 
 const LISTINGS_PER_PAGE = 100;
 const TYPE_LABELS = { equipment: 'Обладнання', parts: 'Запчастини' };
@@ -20,14 +19,41 @@ function isBlockedOrLoggedOut(html) {
   return isChallenged || isLoginPage;
 }
 
-// Returns both the deduped urls (a listing can be linked twice on the same
-// rendered page, e.g. a "related items" sidebar) and the raw href count —
-// pagination must stop based on the raw count, since deduping can drop a
-// page's count below LISTINGS_PER_PAGE even when many more pages remain.
-function extractListingLinks(html) {
+// Each item on a storefront page is wrapped in <div id="listing_<id>_" ...>,
+// and that same item's own href appears several times within its row
+// (thumbnail, title, "view more", seller name) — so neither a raw nor a
+// deduped href count reliably reflects "how many items are on this page".
+// The row wrapper itself is the one signal that maps 1:1 to real items.
+function countListingRows(html) {
+  return (html.match(/<div id="listing_\d+_"/g) || []).length;
+}
+
+// Full mode: just the deduped listing URLs, to be individually scraped +
+// AI-extracted later (existing behavior).
+function extractListingUrls(html) {
   const paths = [...html.matchAll(/href="(\/listing\/[^"]+)"/g)].map((m) => m[1]);
   const uniquePaths = [...new Set(paths)];
-  return { rawCount: paths.length, urls: uniquePaths.map((p) => `https://www.dotmed.com${p}`) };
+  return uniquePaths.map((p) => `https://www.dotmed.com${p}`);
+}
+
+// Simplified mode: title + asking price straight from the seller's own
+// listing-row markup — no per-listing fetch, no AI call. Each row is:
+// <div id="listing_<id>_" ...> ... <h4><a href="/listing/...">Title</a></h4>
+// ... <span class="price">$X USD</span> ... </div>
+function extractStorefrontSummaries(html) {
+  const blocks = html.split(/(?=<div id="listing_\d+_")/).filter((b) => b.startsWith('<div id="listing_'));
+  const summaries = [];
+  for (const block of blocks) {
+    const titleMatch = block.match(/<h4>\s*<a[^>]*href="(\/listing\/[^"]+)"[^>]*>([^<]+)<\/a>\s*<\/h4>/);
+    if (!titleMatch) continue;
+    const priceMatch = block.match(/<span class="price">\s*([^<]+?)\s*<\/span>/);
+    summaries.push({
+      url: `https://www.dotmed.com${titleMatch[1]}`,
+      title: titleMatch[2].trim(),
+      price: priceMatch ? priceMatch[1].replace(/\s+/g, ' ').trim() : '',
+    });
+  }
+  return summaries;
 }
 
 async function fetchStorePage(sellerId, type, offset, cookies) {
@@ -43,8 +69,11 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const EMPTY_PAGE_RETRIES = 3;
 const EMPTY_PAGE_RETRY_DELAY_MS = 1500;
 
-async function fetchTypeListings(sellerId, type, cookies) {
-  const urls = [];
+// extractFn(html) -> items[] — shared pagination/retry/re-login mechanics;
+// only the per-page extraction differs between full and simplified mode.
+// The stop condition always uses countListingRows, independent of extractFn.
+async function paginateType(sellerId, type, cookies, extractFn) {
+  const all = [];
   let offset = 0;
   for (;;) {
     let html = await fetchStorePage(sellerId, type, offset, cookies);
@@ -56,39 +85,26 @@ async function fetchTypeListings(sellerId, type, cookies) {
       }
     }
 
-    // TEMP DEBUG: capture the raw markup around the first listing on the
-    // first page so we can design a price-extraction regex from real
-    // structure instead of guessing. Remove once that's implemented.
-    if (offset === 0) {
-      const linkIdx = html.indexOf('/listing/');
-      if (linkIdx !== -1) {
-        logger.info(
-          { sellerId, type, snippet: html.slice(Math.max(0, linkIdx - 500), linkIdx + 1500) },
-          'TEMP: storefront page markup sample',
-        );
-      }
-    }
-
-    let { rawCount, urls: links } = extractListingLinks(html);
+    let rowCount = countListingRows(html);
 
     // dotmed.com's webstore endpoint is flaky: an offset can transiently
     // return 0 results and then return a full page again at the very same
     // offset a moment later. Treating a single empty page as "end of list"
     // silently truncates large storefronts, so retry before giving up.
-    if (rawCount === 0) {
-      for (let attempt = 1; attempt <= EMPTY_PAGE_RETRIES && rawCount === 0; attempt++) {
+    if (rowCount === 0) {
+      for (let attempt = 1; attempt <= EMPTY_PAGE_RETRIES && rowCount === 0; attempt++) {
         await sleep(EMPTY_PAGE_RETRY_DELAY_MS);
         html = await fetchStorePage(sellerId, type, offset, cookies);
-        ({ rawCount, urls: links } = extractListingLinks(html));
+        rowCount = countListingRows(html);
       }
     }
 
-    urls.push(...links);
+    all.push(...extractFn(html));
 
-    if (rawCount < LISTINGS_PER_PAGE) break;
+    if (rowCount < LISTINGS_PER_PAGE) break;
     offset += LISTINGS_PER_PAGE;
   }
-  return urls;
+  return all;
 }
 
 async function discoverListings(storefrontUrl, types = ['equipment', 'parts']) {
@@ -101,10 +117,34 @@ async function discoverListings(storefrontUrl, types = ['equipment', 'parts']) {
 
   const all = [];
   for (const type of types) {
-    const urls = await fetchTypeListings(sellerId, type, cookies);
+    const urls = await paginateType(sellerId, type, cookies, extractListingUrls);
     all.push(...urls);
   }
   return [...new Set(all)];
 }
 
-module.exports = { discoverListings, extractSellerId };
+// Same seller, same pages — just pulls title+price instead of URLs, for the
+// "simplified" scan mode (no per-item AI extraction).
+async function discoverListingSummaries(storefrontUrl, types = ['equipment', 'parts']) {
+  const sellerId = extractSellerId(storefrontUrl);
+  if (!sellerId) {
+    throw new Error('Не вдалось визначити ID продавця з цього лінку');
+  }
+
+  const cookies = await dotmedAuth.ensureSession();
+
+  const all = [];
+  for (const type of types) {
+    const summaries = await paginateType(sellerId, type, cookies, extractStorefrontSummaries);
+    all.push(...summaries);
+  }
+
+  const seen = new Set();
+  return all.filter((s) => {
+    if (seen.has(s.url)) return false;
+    seen.add(s.url);
+    return true;
+  });
+}
+
+module.exports = { discoverListings, discoverListingSummaries, extractSellerId };

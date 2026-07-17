@@ -479,6 +479,14 @@ textarea:focus, button:focus-visible, a:focus-visible {
   cursor: pointer;
 }
 
+.mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
 .panel-actions {
   margin-top: 12px;
   display: flex;

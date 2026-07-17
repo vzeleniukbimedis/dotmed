@@ -130,13 +130,13 @@ export default function App() {
     setHistory([]);
   }
 
-  async function handleSubmit(urls, types) {
+  async function handleSubmit(urls, types, mode) {
     setError(null);
     setSubmitInfo(null);
     setSubmitting(true);
     setItemsLimit(ITEMS_PAGE_SIZE);
     try {
-      const jobIds = await createJob(urls, types);
+      const jobIds = await createJob(urls, types, mode);
       const j = await getJob(jobIds[0], { offset: 0, limit: ITEMS_PAGE_SIZE });
       setJob(j);
       startPolling(jobIds[0]);

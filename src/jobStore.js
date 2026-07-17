@@ -21,17 +21,20 @@ async function createJob(entries, ownerEmail) {
   const items = [];
   for (let position = 0; position < entries.length; position++) {
     const entry = entries[position];
-    const { url, error } = typeof entry === 'string' ? { url: entry } : entry;
+    // `data` lets a caller pre-fill an already-known result (e.g. the
+    // simplified storefront scan, which reads title/price straight off the
+    // seller's page) so the item never gets queued for a per-item scrape.
+    const { url, error, data } = typeof entry === 'string' ? { url: entry } : entry;
     const itemId = crypto.randomUUID();
-    const status = error ? 'error' : 'pending';
+    const status = error ? 'error' : data ? 'success' : 'pending';
 
     await db.query(
-      `INSERT INTO job_items (id, job_id, position, url, status, error)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [itemId, id, position, url, status, error || null],
+      `INSERT INTO job_items (id, job_id, position, url, status, error, data)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [itemId, id, position, url, status, error || null, data ? JSON.stringify(data) : null],
     );
 
-    const item = error ? { url, status: 'error', error } : { url, status: 'pending' };
+    const item = error ? { url, status: 'error', error } : data ? { url, status: 'success', data } : { url, status: 'pending' };
     Object.defineProperty(item, '__id', { value: itemId, enumerable: false });
     items.push(item);
   }

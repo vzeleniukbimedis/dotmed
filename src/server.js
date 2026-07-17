@@ -4,7 +4,7 @@ const path = require('path');
 const jobStore = require('./jobStore');
 const { runJob, resumeJob, pauseJob, unpauseJob, stopJob, getRunState, getQueuePosition } = require('./jobRunner');
 const { isStorefrontUrl } = require('./dotmedParser');
-const { discoverListings } = require('./storefrontScraper');
+const { discoverListings, discoverListingSummaries } = require('./storefrontScraper');
 const { verifyGoogleToken, getAllowlist, requireAuth } = require('./auth');
 const settingsStore = require('./settingsStore');
 const aiExtractor = require('./aiExtractor');
@@ -100,8 +100,23 @@ app.put('/api/settings', async (req, res) => {
   res.json(await settingsStore.getAllSettings());
 });
 
-async function expandStorefront(url, types) {
+// mode 'simplified' reads title/price straight off the seller's storefront
+// page (no per-item Firecrawl+AI scrape) — items come back already
+// 'success', never queued for scraping. mode 'full' (default) is the
+// existing behavior: just discover the listing URLs, scrape each one.
+async function expandStorefront(url, types, mode) {
   try {
+    if (mode === 'simplified') {
+      const summaries = await discoverListingSummaries(url, types);
+      if (summaries.length === 0) {
+        return [{ url, error: 'У продавця не знайдено оголошень для обраних типів (Обладнання/Запчастини).' }];
+      }
+      return summaries.map((s) => ({
+        url: s.url,
+        data: { title: s.title, price: s.price, condition: '', description: '', isPart: false, photos: [] },
+      }));
+    }
+
     const listingUrls = await discoverListings(url, types);
     if (listingUrls.length === 0) {
       return [{ url, error: 'У продавця не знайдено оголошень для обраних типів (Обладнання/Запчастини).' }];
@@ -123,6 +138,7 @@ app.post('/api/jobs', async (req, res) => {
   const types = Array.isArray(req.body.types) && req.body.types.length
     ? req.body.types
     : ['equipment', 'parts'];
+  const mode = req.body.mode === 'simplified' ? 'simplified' : 'full';
 
   if (urls.length === 0) {
     return res.status(400).json({ error: 'No URLs provided' });
@@ -135,7 +151,7 @@ app.post('/api/jobs', async (req, res) => {
   try {
     jobIds = [];
     for (const storefrontUrl of storefrontUrls) {
-      const entries = await expandStorefront(storefrontUrl, types);
+      const entries = await expandStorefront(storefrontUrl, types, mode);
       const job = await jobStore.createJob(entries, req.session.user.email);
       runJob(job);
       jobIds.push(job.id);

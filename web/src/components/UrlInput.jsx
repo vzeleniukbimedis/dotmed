@@ -5,6 +5,7 @@ import { ScanLine, Loader2 } from 'lucide-react';
 export default function UrlInput({ value, onChange, onSubmit, disabled }) {
   const [includeEquipment, setIncludeEquipment] = useState(true);
   const [includeParts, setIncludeParts] = useState(false);
+  const [mode, setMode] = useState('full');
 
   function handleSubmit() {
     const urls = value.split('\n').map((s) => s.trim()).filter(Boolean);
@@ -13,7 +14,7 @@ export default function UrlInput({ value, onChange, onSubmit, disabled }) {
       ...(includeEquipment ? ['equipment'] : []),
       ...(includeParts ? ['parts'] : []),
     ];
-    onSubmit(urls, types);
+    onSubmit(urls, types, mode);
   }
 
   return (
@@ -45,6 +46,29 @@ export default function UrlInput({ value, onChange, onSubmit, disabled }) {
             disabled={disabled}
           />
           Запчастини
+        </label>
+      </div>
+      <div className="mode-toggle">
+        <span className="type-toggle-label">Режим для продавців:</span>
+        <label className="type-checkbox">
+          <input
+            type="radio"
+            name="scan-mode"
+            checked={mode === 'full'}
+            onChange={() => setMode('full')}
+            disabled={disabled}
+          />
+          Повний скан (AI, усі поля)
+        </label>
+        <label className="type-checkbox">
+          <input
+            type="radio"
+            name="scan-mode"
+            checked={mode === 'simplified'}
+            onChange={() => setMode('simplified')}
+            disabled={disabled}
+          />
+          Спрощений (лінк + ціна, швидко)
         </label>
       </div>
       <div className="panel-actions">
