@@ -66,9 +66,18 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const EMPTY_PAGE_RETRIES = 3;
 const EMPTY_PAGE_RETRY_DELAY_MS = 1500;
 
-// extractFn(html) -> items[] — shared pagination/retry/re-login mechanics;
-// only the per-page extraction differs between full and simplified mode.
-// The stop condition always uses countListingRows, independent of extractFn.
+// extractFn(html, pageUrl) -> items[] — shared pagination/retry/re-login
+// mechanics; only the per-page extraction differs between full and
+// simplified mode.
+//
+// The stop condition prefers countListingRows (cheap, and avoids an
+// off-by-one dedup edge case that once truncated a full page), but some
+// real sellers' pages don't use the `<div id="listing_N_">` wrapper this
+// regex expects at all (confirmed live: webstore/42358 returns rowCount 0
+// on a page the AI still correctly reads 19 real items off of). When the
+// row count says "empty" but extraction actually found items, the row
+// count is simply wrong for this page's markup — fall back to the
+// extracted count instead of trusting a signal that's clearly blind here.
 async function paginateType(sellerId, type, cookies, extractFn) {
   const all = [];
   let offset = 0;
@@ -82,24 +91,27 @@ async function paginateType(sellerId, type, cookies, extractFn) {
       }
     }
 
+    const pageUrl = `https://www.dotmed.com/webstore/?user=${sellerId}&type=${type}&offset=${offset}`;
     let rowCount = countListingRows(html);
+    let extracted = await extractFn(html, pageUrl);
 
     // dotmed.com's webstore endpoint is flaky: an offset can transiently
     // return 0 results and then return a full page again at the very same
-    // offset a moment later. Treating a single empty page as "end of list"
-    // silently truncates large storefronts, so retry before giving up.
-    if (rowCount === 0) {
-      for (let attempt = 1; attempt <= EMPTY_PAGE_RETRIES && rowCount === 0; attempt++) {
+    // offset a moment later. Only retry when BOTH signals agree the page
+    // is empty — if extraction already found real items, the page is not
+    // empty regardless of what the row-count regex says.
+    if (rowCount === 0 && extracted.length === 0) {
+      for (let attempt = 1; attempt <= EMPTY_PAGE_RETRIES && extracted.length === 0; attempt++) {
         await sleep(EMPTY_PAGE_RETRY_DELAY_MS);
         html = await fetchStorePage(sellerId, type, offset, cookies);
         rowCount = countListingRows(html);
+        extracted = await extractFn(html, pageUrl);
       }
     }
 
-    const pageUrl = `https://www.dotmed.com/webstore/?user=${sellerId}&type=${type}&offset=${offset}`;
-    const extracted = await extractFn(html, pageUrl);
+    const pageCount = rowCount > 0 ? rowCount : extracted.length;
 
-    if (rowCount > 0 && extracted.length === 0) {
+    if (pageCount > 0 && extracted.length === 0) {
       logger.error({ sellerId, type, offset, rowCount }, 'page had listing rows but extraction returned none');
     } else {
       logger.info({ sellerId, type, offset, rowCount, extractedCount: extracted.length }, 'storefront page extracted');
@@ -107,7 +119,7 @@ async function paginateType(sellerId, type, cookies, extractFn) {
 
     all.push(...extracted);
 
-    if (rowCount < LISTINGS_PER_PAGE) break;
+    if (pageCount < LISTINGS_PER_PAGE) break;
     offset += LISTINGS_PER_PAGE;
   }
   return all;

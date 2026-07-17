@@ -278,3 +278,33 @@ test('extractStorefrontListings moves to the next provider when the first return
   assert.equal(items.length, 1);
   assert.equal(items[0].title, 'From P2');
 });
+
+test('extractStorefrontListings splits a page far larger than one call\'s budget into chunks and merges the results', async (t) => {
+  const originalFetch = global.fetch;
+  process.env.MODEL_NAME = 'test-model';
+  delete process.env.MODEL_NAME_FALLBACK;
+
+  // Larger than the 40,000-char chunk size, so this must be split into
+  // multiple model calls rather than silently truncated to the first chunk.
+  const hugeHtml = `<p>${'x'.repeat(90_000)}</p>`;
+  let callCount = 0;
+
+  global.fetch = async () => {
+    callCount++;
+    return mockChatResponse(200, {
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            items: [{ url: `https://www.dotmed.com/listing/x/y/${callCount}`, title: `Item ${callCount}`, price: '' }],
+          }),
+        },
+      }],
+    });
+  };
+
+  t.after(() => { global.fetch = originalFetch; });
+
+  const items = await extractStorefrontListings(hugeHtml, 'https://www.dotmed.com/webstore/1');
+  assert.ok(callCount >= 3, `expected multiple chunk calls for a 90k page, got ${callCount}`);
+  assert.equal(items.length, callCount, 'one distinct item found per chunk, merged into the final result');
+});

@@ -198,10 +198,19 @@ async function extractListingData(markdown, url) {
 
 // Storefront pages list many items on one page — a regex over the raw HTML
 // is brittle (dotmed's markup for this varies in ways we don't fully know),
-// so this hands the (cleaned, trimmed) page HTML to the same model chain and
-// asks it to read off every listing's url/title/price directly, the way a
-// person skimming the page would.
-const STOREFRONT_MAX_HTML_CHARS = 60_000;
+// so this hands the (cleaned) page HTML to the same model chain and asks it
+// to read off every listing's url/title/price directly, the way a person
+// skimming the page would.
+//
+// Real pages measured well past a single model call's safe input budget
+// (289KB on one seller, all on a single fetched page with no working
+// offset-based pagination) — sending only the first slice silently drops
+// everything after it. Chunk the cleaned HTML instead, run extraction on
+// every chunk, and merge — a small overlap between chunks keeps an item
+// whose markup straddles a chunk boundary from being lost, with dedup by
+// url cleaning up the resulting overlap duplicates.
+const STOREFRONT_CHUNK_CHARS = 40_000;
+const STOREFRONT_CHUNK_OVERLAP_CHARS = 2_000;
 const STOREFRONT_MAX_TOKENS = 6_000;
 
 function cleanStorefrontHtml(html) {
@@ -213,50 +222,82 @@ function cleanStorefrontHtml(html) {
     .replace(/[ \t]{2,}/g, ' ');
 }
 
+function chunkStorefrontHtml(html) {
+  if (html.length <= STOREFRONT_CHUNK_CHARS) return [html];
+  const chunks = [];
+  let start = 0;
+  while (start < html.length) {
+    const end = Math.min(start + STOREFRONT_CHUNK_CHARS, html.length);
+    chunks.push(html.slice(start, end));
+    if (end >= html.length) break;
+    start = end - STOREFRONT_CHUNK_OVERLAP_CHARS;
+  }
+  return chunks;
+}
+
 function buildStorefrontSystemPrompt() {
   return [
-    'You read a DOTmed.com seller storefront page (raw HTML) listing multiple medical equipment/parts items for sale.',
+    'You read one slice of a DOTmed.com seller storefront page (raw HTML) listing multiple medical equipment/parts items for sale.',
+    'The slice may start or end mid-item since it is one chunk of a larger page — only extract items whose title and url are actually present in this slice.',
     'Each item appears in a block similar to this real example:',
     '<div id="listing_5582241_" ...><h4><a href="/listing/podiatric-x-ray/curvebeam/ped-cat/5582241">CurveBeam Ped CAT Podiatric X-Ray For Sale</a></h4> ... <span class="price">$15,950 USD</span> ... </div>',
-    'For EVERY item block found anywhere on the page, extract:',
+    'Some pages use different markup for the same information — read by meaning (a link to /listing/... is the item, its visible link text is the title, its displayed asking price is the price), not by matching this exact example structure.',
+    'For EVERY item found in this slice, extract:',
     '- "url": the href starting with /listing/, made absolute as "https://www.dotmed.com" + href',
-    '- "title": the link text inside the <h4>',
-    '- "price": the text inside the price element exactly as shown, "" if genuinely absent',
-    'Do not skip any item, and do not invent items that are not on the page.',
+    '- "title": the item\'s title text',
+    '- "price": the asking price text exactly as shown, "" if genuinely absent',
+    'Do not skip any item, and do not invent items that are not in this slice.',
     'Respond with ONLY a JSON object: {"items": [{"url": "...", "title": "...", "price": "..."}, ...]}',
   ].join('\n');
 }
 
-async function extractStorefrontListings(html, pageUrl) {
+async function extractChunkListings(chunk, pageUrl, chunkLabel) {
   const providers = getProviders();
   if (providers.length === 0) {
     throw new Error('Не налаштовано жодного AI-провайдера (OPENAI_BASE_URL/OPENAI_API_KEY/MODEL_NAME)');
   }
 
-  const cleaned = cleanStorefrontHtml(html);
   const systemPrompt = buildStorefrontSystemPrompt();
 
   let lastError;
   for (const provider of providers) {
     for (const model of provider.models) {
       try {
-        const result = await callModel(provider, model, cleaned, {
+        const result = await callModel(provider, model, chunk, {
           systemPrompt,
           maxTokens: STOREFRONT_MAX_TOKENS,
-          maxInputChars: STOREFRONT_MAX_HTML_CHARS,
+          maxInputChars: STOREFRONT_CHUNK_CHARS,
         });
         const items = Array.isArray(result?.items) ? result.items : [];
         if (items.length > 0) return items;
-        logger.error({ pageUrl, provider: provider.name, model }, 'storefront page extraction returned no items');
+        logger.error({ pageUrl, chunkLabel, provider: provider.name, model }, 'storefront chunk extraction returned no items');
       } catch (err) {
         lastError = err;
-        logger.error({ pageUrl, provider: provider.name, model, err }, 'storefront listing extraction attempt failed');
+        logger.error({ pageUrl, chunkLabel, provider: provider.name, model, err }, 'storefront chunk extraction attempt failed');
       }
     }
   }
 
   if (lastError) throw lastError;
   return [];
+}
+
+async function extractStorefrontListings(html, pageUrl) {
+  const cleaned = cleanStorefrontHtml(html);
+  const chunks = chunkStorefrontHtml(cleaned);
+
+  const all = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const items = await extractChunkListings(chunks[i], pageUrl, `${i + 1}/${chunks.length}`);
+    all.push(...items);
+  }
+
+  const seen = new Set();
+  return all.filter((item) => {
+    if (!item?.url || seen.has(item.url)) return false;
+    seen.add(item.url);
+    return true;
+  });
 }
 
 module.exports = { extractListingData, extractStorefrontListings, buildSystemPrompt, getRateLimitInfo, getProviders };
