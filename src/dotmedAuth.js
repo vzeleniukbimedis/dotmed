@@ -202,7 +202,14 @@ function loadSession() {
 // when there genuinely isn't one yet.
 function seedSessionFromEnv() {
   const raw = process.env.DOTMED_SESSION_COOKIES;
-  if (!raw || loadSession()) return;
+  if (!raw) {
+    logger.info('DOTMED_SESSION_COOKIES not set, nothing to seed');
+    return;
+  }
+  if (loadSession()) {
+    logger.info('valid session already exists, skipping DOTMED_SESSION_COOKIES seed');
+    return;
+  }
 
   try {
     const cookies = JSON.parse(raw);
