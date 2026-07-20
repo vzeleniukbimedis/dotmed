@@ -3,12 +3,14 @@ const path = require('path');
 const { ProxyAgent } = require('undici');
 const { chromium } = require('playwright');
 const { getSetting } = require('./settingsStore');
-const proxyRotator = require('./proxyRotator');
 const logger = require('./logger').child({ module: 'dotmedAuth' });
 
 const SESSION_PATH = path.join(__dirname, '..', 'data', 'dotmed-session.json');
 const MAX_SESSION_AGE_MS = 12 * 60 * 60 * 1000;
 const MAX_ATTEMPTS = 3;
+const RETRY_DELAY_MS = 3_000;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // A bare fetch() sends no User-Agent/Accept headers, which Cloudflare's bot
 // detection fingerprints and blocks on sight — these make the request look
@@ -37,18 +39,6 @@ function buildProxyDispatcher() {
 
 const proxyDispatcher = buildProxyDispatcher();
 
-// Same proxy as buildProxyDispatcher(), in Playwright's own config shape.
-function buildBrowserProxy() {
-  const server = process.env.PROXY_SERVER;
-  if (!server) return undefined;
-  const config = { server };
-  if (process.env.PROXY_USERNAME) {
-    config.username = process.env.PROXY_USERNAME;
-    config.password = process.env.PROXY_PASSWORD || '';
-  }
-  return config;
-}
-
 // Cloudflare serves more than one challenge page depending on how
 // suspicious it finds the request — "Attention Required!" is a hard block,
 // but "Just a moment..." (its JS/managed challenge interstitial) is just as
@@ -69,6 +59,16 @@ function isCloudflareBlock(html, status) {
 // run the challenge script. A real (headless) browser solves it the same
 // way a human's browser would, then we lift its session cookies back out
 // for the rest of the app's plain fetch() calls to reuse.
+//
+// Deliberately NOT routed through PROXY_SERVER: confirmed live (both in
+// production logs and reproduced locally with the same proxy credentials)
+// that Cloudflare's challenge script itself makes a follow-up request to
+// challenges.cloudflare.com to complete verification, and that request
+// fails through this proxy with net::ERR_TUNNEL_CONNECTION_FAILED — the
+// interstitial then hangs forever waiting for a verification that can
+// never arrive. A real browser's own JS execution + fingerprint is usually
+// enough to pass Cloudflare even from a datacenter IP (unlike raw fetch()),
+// so going out directly avoids a proxy limitation that only makes this worse.
 async function attemptLogin(email, password) {
   // --disable-dev-shm-usage: Docker's default /dev/shm (64MB) is too small
   // for Chromium's shared memory use and crashes it under real load —
@@ -77,7 +77,6 @@ async function attemptLogin(email, password) {
   const browser = await chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] });
   try {
     const context = await browser.newContext({
-      proxy: buildBrowserProxy(),
       userAgent: BROWSER_HEADERS['User-Agent'],
       locale: 'en-US',
     });
@@ -152,18 +151,17 @@ async function login() {
 
   logger.info({ email }, 'attempting login');
 
+  // No IP rotation here — the login browser goes out on the container's own
+  // IP (see attemptLogin), so retrying just gives the challenge another
+  // shot rather than working around an IP-reputation problem.
   let result;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     result = await attemptLogin(email, password);
     if (result.success || !result.blocked) break;
 
     if (attempt < MAX_ATTEMPTS) {
-      logger.info({ attempt, maxAttempts: MAX_ATTEMPTS }, 'blocked by Cloudflare, rotating IP and retrying');
-      try {
-        await proxyRotator.rotateIp();
-      } catch (err) {
-        logger.error({ err }, 'IP rotation failed, retrying without it');
-      }
+      logger.info({ attempt, maxAttempts: MAX_ATTEMPTS }, 'blocked by Cloudflare, retrying');
+      await sleep(RETRY_DELAY_MS);
     }
   }
 
