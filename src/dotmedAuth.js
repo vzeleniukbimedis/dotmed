@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { ProxyAgent } = require('undici');
+const { chromium } = require('playwright');
 const { getSetting } = require('./settingsStore');
 const proxyRotator = require('./proxyRotator');
 const logger = require('./logger').child({ module: 'dotmedAuth' });
@@ -36,15 +37,16 @@ function buildProxyDispatcher() {
 
 const proxyDispatcher = buildProxyDispatcher();
 
-function parseSetCookies(res) {
-  const raw = typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : [];
-  return raw.map((c) => c.split(';')[0]);
-}
-
-function mergeCookies(existing, incoming) {
-  const map = new Map(existing.map((c) => [c.split('=')[0], c]));
-  for (const c of incoming) map.set(c.split('=')[0], c);
-  return [...map.values()];
+// Same proxy as buildProxyDispatcher(), in Playwright's own config shape.
+function buildBrowserProxy() {
+  const server = process.env.PROXY_SERVER;
+  if (!server) return undefined;
+  const config = { server };
+  if (process.env.PROXY_USERNAME) {
+    config.username = process.env.PROXY_USERNAME;
+    config.password = process.env.PROXY_PASSWORD || '';
+  }
+  return config;
 }
 
 // Cloudflare serves more than one challenge page depending on how
@@ -62,60 +64,66 @@ function isCloudflareBlock(html, status) {
       || html.includes('challenge-platform'));
 }
 
+// DOTmed's login sits behind a Cloudflare JS challenge ("Just a moment...")
+// that a plain fetch() can never pass — it requires an actual JS engine to
+// run the challenge script. A real (headless) browser solves it the same
+// way a human's browser would, then we lift its session cookies back out
+// for the rest of the app's plain fetch() calls to reuse.
 async function attemptLogin(email, password) {
-  let cookies = [];
+  // --disable-dev-shm-usage: Docker's default /dev/shm (64MB) is too small
+  // for Chromium's shared memory use and crashes it under real load —
+  // without this flag the browser works fine locally but dies in the
+  // container the moment memory pressure shows up.
+  const browser = await chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] });
+  try {
+    const context = await browser.newContext({
+      proxy: buildBrowserProxy(),
+      userAgent: BROWSER_HEADERS['User-Agent'],
+      locale: 'en-US',
+    });
+    const page = await context.newPage();
 
-  const loginPage = await fetch('https://www.dotmed.com/login', {
-    redirect: 'manual',
-    headers: BROWSER_HEADERS,
-    dispatcher: proxyDispatcher,
-  });
-  cookies = mergeCookies(cookies, parseSetCookies(loginPage));
-  logger.debug({ status: loginPage.status, cookieNames: cookies.map((c) => c.split('=')[0]) }, 'fetched login page');
+    await page.goto('https://www.dotmed.com/login', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    // If Cloudflare showed a challenge interstitial first, this waits
+    // through its client-side redirect to the real login form.
+    await page.waitForSelector('input[name="pass"]', { timeout: 20_000 });
 
-  const body = new URLSearchParams({ user: email, pass: password, refer: '', backfromssl: '0' });
-  const res = await fetch('https://www.dotmed.com/login.html', {
-    method: 'POST',
-    redirect: 'manual',
-    headers: {
-      ...BROWSER_HEADERS,
-      'Content-Type': 'application/x-www-form-urlencoded',
-      Cookie: cookies.join('; '),
-    },
-    body: body.toString(),
-    dispatcher: proxyDispatcher,
-  });
-  cookies = mergeCookies(cookies, parseSetCookies(res));
-  logger.debug(
-    { status: res.status, location: res.headers.get('location'), cookieNames: cookies.map((c) => c.split('=')[0]) },
-    'submitted login form',
-  );
+    await page.fill('input[name="user"]', email);
+    await page.fill('input[name="pass"]', password);
+    await Promise.all([
+      page.waitForLoadState('domcontentloaded'),
+      page.click('input[type="submit"]'),
+    ]);
 
-  const check = await fetch('https://www.dotmed.com/users/my/', {
-    headers: { ...BROWSER_HEADERS, Cookie: cookies.join('; ') },
-    redirect: 'follow',
-    dispatcher: proxyDispatcher,
-  });
-  const html = await check.text();
-  const titleMatch = html.match(/<title>([^<]*)<\/title>/i);
-  const success = html.includes('logout.html');
-  const blocked = !success && isCloudflareBlock(html, check.status);
+    const check = await page.goto('https://www.dotmed.com/users/my/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    // Let any challenge interstitial on this page settle before reading it.
+    await page.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => {});
 
-  if (!success) {
-    logger.error(
-      {
-        status: check.status,
-        finalUrl: check.url,
-        pageTitle: titleMatch?.[1]?.trim() || null,
-        htmlLength: html.length,
-        hasLoginForm: html.includes('name="pass"'),
-        cloudflareBlock: blocked,
-      },
-      'login check failed on /users/my/',
-    );
+    const html = await page.content();
+    const titleMatch = html.match(/<title>([^<]*)<\/title>/i);
+    const success = html.includes('logout.html');
+    const status = check?.status() ?? 0;
+    const blocked = !success && isCloudflareBlock(html, status);
+    const cookies = (await context.cookies()).map((c) => `${c.name}=${c.value}`);
+
+    if (!success) {
+      logger.error(
+        {
+          status,
+          finalUrl: page.url(),
+          pageTitle: titleMatch?.[1]?.trim() || null,
+          htmlLength: html.length,
+          hasLoginForm: html.includes('name="pass"'),
+          cloudflareBlock: blocked,
+        },
+        'login check failed on /users/my/',
+      );
+    }
+
+    return { success, blocked, cookies };
+  } finally {
+    await browser.close();
   }
-
-  return { success, blocked, cookies };
 }
 
 async function login() {

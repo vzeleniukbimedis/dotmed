@@ -9,8 +9,13 @@ COPY web/ ./
 RUN npm run build
 # vite.config.js outDir '../public' -> writes to /app/public
 
-# ---- Stage 2: slim runtime ----
-FROM node:22-alpine
+# ---- Stage 2: runtime ----
+# DOTmed's login page is behind a Cloudflare JS challenge that a plain HTTP
+# fetch() can never pass — logging in now drives a real headless Chromium via
+# Playwright instead. This base image ships Chromium + all its system
+# libraries prebuilt for this exact Playwright version (musl/Alpine is not
+# officially supported by Playwright, hence the switch off node:alpine).
+FROM mcr.microsoft.com/playwright:v1.61.1-noble
 WORKDIR /app
 ENV NODE_ENV=production
 COPY package*.json ./
