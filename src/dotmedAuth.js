@@ -47,9 +47,19 @@ function mergeCookies(existing, incoming) {
   return [...map.values()];
 }
 
+// Cloudflare serves more than one challenge page depending on how
+// suspicious it finds the request — "Attention Required!" is a hard block,
+// but "Just a moment..." (its JS/managed challenge interstitial) is just as
+// real a block and was slipping through undetected, which silently skipped
+// the IP-rotation retry entirely and surfaced a misleading "check your
+// credentials" error for what was actually a Cloudflare block.
 function isCloudflareBlock(html, status) {
   return status === 403
-    && (html.includes('Attention Required') || html.includes('cf-turnstile') || html.includes('Performing security verification'));
+    && (html.includes('Attention Required')
+      || html.includes('cf-turnstile')
+      || html.includes('Performing security verification')
+      || html.includes('Just a moment')
+      || html.includes('challenge-platform'));
 }
 
 async function attemptLogin(email, password) {
@@ -169,4 +179,4 @@ async function invalidateAndRelogin() {
   return login();
 }
 
-module.exports = { ensureSession, login, invalidateAndRelogin, SESSION_PATH, BROWSER_HEADERS, proxyDispatcher };
+module.exports = { ensureSession, login, invalidateAndRelogin, SESSION_PATH, BROWSER_HEADERS, proxyDispatcher, isCloudflareBlock };
