@@ -6,7 +6,12 @@ const { getSetting } = require('./settingsStore');
 const logger = require('./logger').child({ module: 'dotmedAuth' });
 
 const SESSION_PATH = path.join(__dirname, '..', 'data', 'dotmed-session.json');
-const MAX_SESSION_AGE_MS = 12 * 60 * 60 * 1000;
+// DOTmed's own session cookie (SID2) is valid for ~30 days — confirmed by
+// inspecting a real logged-in session's cookies, not a guess. The original
+// 12h value was our own overly-conservative default, which just meant
+// re-running the login flow (and re-hitting Cloudflare) far more often
+// than the underlying session actually required.
+const MAX_SESSION_AGE_MS = 25 * 24 * 60 * 60 * 1000;
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 3_000;
 
@@ -189,6 +194,26 @@ function loadSession() {
   }
 }
 
+// Escape hatch for when this server's own IP (proxied or not) can't get a
+// session past Cloudflare on its own: log in from a machine that can (e.g.
+// a residential IP with no such block), then set its resulting cookies as
+// DOTMED_SESSION_COOKIES (a JSON array of "name=value" strings) here. Never
+// overwrites an existing still-valid session — this only fills the gap
+// when there genuinely isn't one yet.
+function seedSessionFromEnv() {
+  const raw = process.env.DOTMED_SESSION_COOKIES;
+  if (!raw || loadSession()) return;
+
+  try {
+    const cookies = JSON.parse(raw);
+    fs.mkdirSync(path.dirname(SESSION_PATH), { recursive: true });
+    fs.writeFileSync(SESSION_PATH, JSON.stringify({ cookies, createdAt: Date.now() }, null, 2));
+    logger.info({ cookieCount: cookies.length }, 'seeded DOTmed session from DOTMED_SESSION_COOKIES');
+  } catch (err) {
+    logger.error({ err }, 'failed to seed session from DOTMED_SESSION_COOKIES');
+  }
+}
+
 async function ensureSession() {
   return loadSession() || login();
 }
@@ -202,4 +227,7 @@ async function invalidateAndRelogin() {
   return login();
 }
 
-module.exports = { ensureSession, login, invalidateAndRelogin, SESSION_PATH, BROWSER_HEADERS, proxyDispatcher, isCloudflareBlock };
+module.exports = {
+  ensureSession, login, invalidateAndRelogin, seedSessionFromEnv,
+  SESSION_PATH, BROWSER_HEADERS, proxyDispatcher, isCloudflareBlock,
+};

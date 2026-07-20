@@ -5,6 +5,7 @@ const jobStore = require('./jobStore');
 const { runJob, resumeJob, pauseJob, unpauseJob, stopJob, getRunState, getQueuePosition } = require('./jobRunner');
 const { isStorefrontUrl } = require('./dotmedParser');
 const { discoverListings, discoverListingSummaries } = require('./storefrontScraper');
+const dotmedAuth = require('./dotmedAuth');
 const { verifyGoogleToken, getAllowlist, requireAuth } = require('./auth');
 const settingsStore = require('./settingsStore');
 const aiExtractor = require('./aiExtractor');
@@ -276,6 +277,7 @@ async function recoverInterruptedJobs() {
   }
 }
 
+dotmedAuth.seedSessionFromEnv();
 recoverInterruptedJobs().catch((err) => logger.error({ err }, 'startup recovery failed'));
 
 app.listen(PORT, () => {
