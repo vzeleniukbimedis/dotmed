@@ -197,17 +197,19 @@ function loadSession() {
 // Escape hatch for when this server's own IP (proxied or not) can't get a
 // session past Cloudflare on its own: log in from a machine that can (e.g.
 // a residential IP with no such block), then set its resulting cookies as
-// DOTMED_SESSION_COOKIES (a JSON array of "name=value" strings) here. Never
-// overwrites an existing still-valid session — this only fills the gap
-// when there genuinely isn't one yet.
+// DOTMED_SESSION_COOKIES (a JSON array of "name=value" strings) here.
+//
+// Always applies when set, even over an existing "still valid" session —
+// deliberately, not an oversight: the session file lives on a volume that
+// survives redeploys, so a stale file from a much older login can still
+// pass the (intentionally generous, ~25-day) expiry check while actually
+// belonging to a different/broken account. Setting this env var is a
+// deliberate operator action; it should win. Unset it once the server can
+// log in on its own again.
 function seedSessionFromEnv() {
   const raw = process.env.DOTMED_SESSION_COOKIES;
   if (!raw) {
     logger.info('DOTMED_SESSION_COOKIES not set, nothing to seed');
-    return;
-  }
-  if (loadSession()) {
-    logger.info('valid session already exists, skipping DOTMED_SESSION_COOKIES seed');
     return;
   }
 
