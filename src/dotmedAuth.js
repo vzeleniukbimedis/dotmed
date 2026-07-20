@@ -83,44 +83,61 @@ async function attemptLogin(email, password) {
     });
     const page = await context.newPage();
 
-    await page.goto('https://www.dotmed.com/login', { waitUntil: 'domcontentloaded', timeout: 30_000 });
-    // If Cloudflare showed a challenge interstitial first, this waits
-    // through its client-side redirect to the real login form.
-    await page.waitForSelector('input[name="pass"]', { timeout: 20_000 });
+    try {
+      await page.goto('https://www.dotmed.com/login', { waitUntil: 'domcontentloaded', timeout: 45_000 });
+      // If Cloudflare showed a challenge interstitial first, this waits
+      // through its client-side redirect to the real login form.
+      await page.waitForSelector('input[name="pass"]', { timeout: 30_000 });
 
-    await page.fill('input[name="user"]', email);
-    await page.fill('input[name="pass"]', password);
-    await Promise.all([
-      page.waitForLoadState('domcontentloaded'),
-      page.click('input[type="submit"]'),
-    ]);
+      await page.fill('input[name="user"]', email);
+      await page.fill('input[name="pass"]', password);
+      await Promise.all([
+        page.waitForLoadState('domcontentloaded'),
+        page.click('input[type="submit"]'),
+      ]);
 
-    const check = await page.goto('https://www.dotmed.com/users/my/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
-    // Let any challenge interstitial on this page settle before reading it.
-    await page.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => {});
+      const check = await page.goto('https://www.dotmed.com/users/my/', { waitUntil: 'domcontentloaded', timeout: 45_000 });
+      // Let any challenge interstitial on this page settle before reading it.
+      await page.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => {});
 
-    const html = await page.content();
-    const titleMatch = html.match(/<title>([^<]*)<\/title>/i);
-    const success = html.includes('logout.html');
-    const status = check?.status() ?? 0;
-    const blocked = !success && isCloudflareBlock(html, status);
-    const cookies = (await context.cookies()).map((c) => `${c.name}=${c.value}`);
+      const html = await page.content();
+      const titleMatch = html.match(/<title>([^<]*)<\/title>/i);
+      const success = html.includes('logout.html');
+      const status = check?.status() ?? 0;
+      const blocked = !success && isCloudflareBlock(html, status);
+      const cookies = (await context.cookies()).map((c) => `${c.name}=${c.value}`);
 
-    if (!success) {
+      if (!success) {
+        logger.error(
+          {
+            status,
+            finalUrl: page.url(),
+            pageTitle: titleMatch?.[1]?.trim() || null,
+            htmlLength: html.length,
+            hasLoginForm: html.includes('name="pass"'),
+            cloudflareBlock: blocked,
+          },
+          'login check failed on /users/my/',
+        );
+      }
+
+      return { success, blocked, cookies };
+    } catch (err) {
+      // A Playwright action (goto/waitForSelector/etc.) can throw outright —
+      // e.g. the login form never appears because the browser got stuck on
+      // a challenge interstitial that didn't resolve in time. Without this,
+      // that exception would escape attemptLogin entirely and skip login()'s
+      // retry+IP-rotation loop, surfacing a raw Playwright timeout to the
+      // user instead of the flow already built to recover from exactly this.
+      const html = await page.content().catch(() => '');
+      const titleMatch = html.match(/<title>([^<]*)<\/title>/i);
       logger.error(
-        {
-          status,
-          finalUrl: page.url(),
-          pageTitle: titleMatch?.[1]?.trim() || null,
-          htmlLength: html.length,
-          hasLoginForm: html.includes('name="pass"'),
-          cloudflareBlock: blocked,
-        },
-        'login check failed on /users/my/',
+        { err, finalUrl: page.url(), pageTitle: titleMatch?.[1]?.trim() || null, htmlLength: html.length },
+        'login flow threw before completing (stuck on interstitial or navigation failure?)',
       );
+      const cookies = (await context.cookies().catch(() => [])).map((c) => `${c.name}=${c.value}`);
+      return { success: false, blocked: true, cookies };
     }
-
-    return { success, blocked, cookies };
   } finally {
     await browser.close();
   }
