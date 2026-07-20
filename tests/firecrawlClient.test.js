@@ -110,6 +110,31 @@ test('scrapeListing backs off before retrying a connection-refused failure (Fire
   assert.ok(Date.now() - start >= 30, 'must pause before retrying after ECONNREFUSED');
 });
 
+test('scrapeListing routes through DOTMED_PROXY_URL when configured, and un-rewrites image URLs before extraction', async (t) => {
+  const originalFetch = global.fetch;
+  const originalExtract = aiExtractor.extractListingData;
+  const originalProxyUrl = process.env.DOTMED_PROXY_URL;
+  process.env.DOTMED_PROXY_URL = 'https://dotmed-proxy.example.workers.dev';
+
+  let requestedUrl;
+  global.fetch = async (input, opts) => {
+    requestedUrl = JSON.parse(opts.body).url;
+    return firecrawlResponse(200, '![](https://dotmed-proxy.example.workers.dev/__img__/images/listingpics2/abc.jpg)');
+  };
+  aiExtractor.extractListingData = async () => ({ title: 'CT Scanner', condition: '', description: 'x', isPart: false });
+
+  t.after(() => {
+    global.fetch = originalFetch;
+    aiExtractor.extractListingData = originalExtract;
+    if (originalProxyUrl === undefined) delete process.env.DOTMED_PROXY_URL;
+    else process.env.DOTMED_PROXY_URL = originalProxyUrl;
+  });
+
+  const result = await scrapeListing('https://www.dotmed.com/listing/x/y/6?ref=abc');
+  assert.equal(requestedUrl, 'https://dotmed-proxy.example.workers.dev/listing/x/y/6?ref=abc');
+  assert.deepEqual(result.photos, ['https://images.dotmed.com/images/listingpics2/abc.jpg']);
+});
+
 test('scrapeListing surfaces the AI extraction call error message on repeated failure', async (t) => {
   const originalFetch = global.fetch;
   const originalExtract = aiExtractor.extractListingData;

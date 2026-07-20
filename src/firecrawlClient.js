@@ -29,6 +29,35 @@ function getConnectionErrorBackoffMs() {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Optional: route Firecrawl's scrape requests through a Cloudflare Worker
+// reverse-proxying dotmed.com, instead of hitting it directly. Confirmed
+// live that individual listing pages sail straight through Cloudflare via
+// the worker (Cloudflare-edge-to-Cloudflare-edge traffic) even when
+// Firecrawl's own proxy+playwright-service times out or gets blocked going
+// direct — Firecrawl never carries our authenticated session cookies, so
+// every request looks like a fresh, unfamiliar anonymous visit to
+// Cloudflare, unlike our own cookie-authenticated fetches elsewhere.
+function getProxyBase() {
+  const base = process.env.DOTMED_PROXY_URL;
+  return base ? base.replace(/\/+$/, '') : null;
+}
+
+function rewriteToProxy(url) {
+  const base = getProxyBase();
+  if (!base) return url;
+  const parsed = new URL(url);
+  return `${base}${parsed.pathname}${parsed.search}`;
+}
+
+// The worker rewrites image URLs to stay same-origin (.../__img__/...) so
+// they load through it too — undo that before photo extraction, which
+// matches the canonical images.dotmed.com URL shape.
+function unrewriteImageUrls(markdown) {
+  const base = getProxyBase();
+  if (!base || !markdown) return markdown;
+  return markdown.split(`${base}/__img__/`).join('https://images.dotmed.com/');
+}
+
 function isBlockedResponse(data) {
   const statusCode = data?.metadata?.statusCode;
   const markdown = data?.markdown || '';
@@ -63,7 +92,7 @@ async function requestScrape(url) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        url,
+        url: rewriteToProxy(url),
         formats: ['markdown'],
         onlyMainContent: true,
       }),
@@ -88,6 +117,7 @@ async function requestScrape(url) {
     const detail = body?.error ? `: ${body.error}` : '';
     throw new Error(`Firecrawl request failed (HTTP ${res.status})${detail}`);
   }
+  if (body.data?.markdown) body.data.markdown = unrewriteImageUrls(body.data.markdown);
   return body.data;
 }
 
