@@ -28,6 +28,30 @@ test('scrapeListing returns extracted data with photos on success', async (t) =>
   assert.equal(result.photos.length, 1);
 });
 
+test('scrapeListing tells Firecrawl its own scrape timeout explicitly, not relying on Firecrawl\'s default', async (t) => {
+  const originalFetch = global.fetch;
+  const originalExtract = aiExtractor.extractListingData;
+  const originalScrapeTimeout = process.env.FIRECRAWL_SCRAPE_TIMEOUT_MS;
+  process.env.FIRECRAWL_SCRAPE_TIMEOUT_MS = '60000';
+
+  let requestedTimeout;
+  global.fetch = async (input, opts) => {
+    requestedTimeout = JSON.parse(opts.body).timeout;
+    return firecrawlResponse(200, 'real content');
+  };
+  aiExtractor.extractListingData = async () => ({ title: 'OK', condition: '', description: 'd', isPart: false });
+
+  t.after(() => {
+    global.fetch = originalFetch;
+    aiExtractor.extractListingData = originalExtract;
+    if (originalScrapeTimeout === undefined) delete process.env.FIRECRAWL_SCRAPE_TIMEOUT_MS;
+    else process.env.FIRECRAWL_SCRAPE_TIMEOUT_MS = originalScrapeTimeout;
+  });
+
+  await scrapeListing('https://www.dotmed.com/listing/x/y/7');
+  assert.equal(requestedTimeout, 60000);
+});
+
 test('scrapeListing retries when the AI returns all-empty fields, then throws after MAX_ATTEMPTS', async (t) => {
   const originalFetch = global.fetch;
   const originalExtract = aiExtractor.extractListingData;

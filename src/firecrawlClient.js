@@ -5,12 +5,27 @@ const logger = require('./logger').child({ module: 'firecrawlClient' });
 
 const FIRECRAWL_URL = process.env.FIRECRAWL_URL || 'http://localhost:3002';
 const MAX_ATTEMPTS = 3;
-// Firecrawl renders the page in a real browser, so this needs more headroom
-// than a plain AI call — but it's still a hang guard: without it a stalled
-// (not erroring) Firecrawl request blocks this worker, and every job queued
-// behind it, forever. Overridable via env for fast tests.
+
+// Firecrawl's own internal render/scrape timeout, separate from (and
+// shorter than) getTimeoutMs() below — it's Firecrawl's own budget for
+// loading the page in its browser, not a hang guard on our side. Never
+// set explicitly before, so Firecrawl fell back to its own default (~30s,
+// per observed retry cadence), which stopped being enough once scrapes
+// started routing through an extra proxy hop (DOTMED_PROXY_URL) and
+// picked up real added latency — Firecrawl's own HTTP 408 error message
+// literally suggests raising this.
+function getScrapeTimeoutMs() {
+  return Number(process.env.FIRECRAWL_SCRAPE_TIMEOUT_MS) || 60_000;
+}
+
+// Our own hang guard around the whole Firecrawl request/response — without
+// it a stalled (not erroring) Firecrawl request blocks this worker, and
+// every job queued behind it, forever. Must stay comfortably above
+// getScrapeTimeoutMs() so Firecrawl's own internal timeout fires (and
+// returns a real HTTP 408 we can log/retry) before we abort the request
+// out from under it. Overridable via env for fast tests.
 function getTimeoutMs() {
-  return Number(process.env.FIRECRAWL_REQUEST_TIMEOUT_MS) || 45_000;
+  return Number(process.env.FIRECRAWL_REQUEST_TIMEOUT_MS) || getScrapeTimeoutMs() + 15_000;
 }
 
 // Seen repeatedly on redeploy: dotmed-parser boots and auto-resumes queued
@@ -95,6 +110,7 @@ async function requestScrape(url) {
         url: rewriteToProxy(url),
         formats: ['markdown'],
         onlyMainContent: true,
+        timeout: getScrapeTimeoutMs(),
       }),
       signal: controller.signal,
     });
